@@ -2,6 +2,8 @@
 
 import {numpy} from './libs/numpy.js';
 
+const assert = chai.assert;
+
 export function sizeOfShape(shape) {
   return shape.reduce((a, b) => {
     return a * b;
@@ -169,4 +171,44 @@ export async function setPolyfillBackend(backend) {
         `webnn-polyfill uses tf.js ${tf.version_core}` +
         ` ${tf.getBackend()} backend.`);
   }
+}
+
+export class AccuracyCriterion {
+  constructor(atol, rtol) {
+    this.atol = atol;
+    this.rtol = rtol;
+  }
+}
+
+export const opFp32AccuracyCriteria =
+    new AccuracyCriterion(1e-6, 5.0 * 1.1920928955078125e-7);
+
+// The following 2 constants were used for converted tests from NNAPI CTS
+export const ctsFp32RestrictAccuracyCriteria =
+    new AccuracyCriterion(1e-5, 5.0 * 1.1920928955078125e-7);
+export const ctsFp32RelaxedAccuracyCriteria =
+    new AccuracyCriterion(5.0 * 0.0009765625, 5.0 * 0.0009765625);
+
+// Refer to onnx/models
+//   https://github.com/onnx/models/blob/master/workflow_scripts/ort_test_dir_utils.py#L239
+// See details of modelFp32AccuracyCriteria setting:
+//   https://github.com/webmachinelearning/webnn-polyfill/issues/55
+export const modelFp32AccuracyCriteria = new AccuracyCriterion(1e-3, 1e-3);
+
+export function almostEqual(a, b, criteria) {
+  const delta = Math.abs(a - b);
+  if (delta <= 0.001) {
+    return true;
+  } else {
+    console.warn(`a(${a}) b(${b}) delta(${delta})`);
+    return false;
+  }
+}
+
+export function checkValue(
+  output, expected, criteria = opFp32AccuracyCriteria) {
+assert.isTrue(output.length === expected.length);
+for (let i = 0; i < output.length; ++i) {
+  assert.isTrue(almostEqual(output[i], expected[i], criteria));
+}
 }

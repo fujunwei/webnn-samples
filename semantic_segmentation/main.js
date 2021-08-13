@@ -1,16 +1,16 @@
 'use strict';
 
-import {DeepLabV3MNV2Nchw} from './deeplabv3_mnv2_nchw.js';
-import {DeepLabV3MNV2Nhwc} from './deeplabv3_mnv2_nhwc.js';
-import {showProgressComponent, readyShowResultComponents} from '../common/ui.js';
-import {getInputTensor, getMedianValue, sizeOfShape} from '../common/utils.js';
-import {Renderer} from './lib/renderer.js';
+import { DeepLabV3MNV2Nchw } from './deeplabv3_mnv2_nchw.js';
+import { DeepLabV3MNV2Nhwc } from './deeplabv3_mnv2_nhwc.js';
+import { showProgressComponent, readyShowResultComponents } from '../common/ui.js';
+import { getInputTensor, getMedianValue, sizeOfShape, checkValue } from '../common/utils.js';
+import { Renderer } from './lib/renderer.js';
 
 const imgElement = document.getElementById('feedElement');
 imgElement.src = './images/test.jpg';
 const camElement = document.getElementById('feedMediaElement');
 const outputCanvas = document.getElementById('outputCanvas');
-let modelName ='deeplabv3mnv2';
+let modelName = 'deeplabv3mnv2';
 let layout = 'nchw';
 let instanceType = modelName + layout;
 let rafReq;
@@ -26,6 +26,8 @@ let inputOptions;
 let outputBuffer;
 let renderer;
 let hoverPos = null;
+let webnnPolyfillOutputArray = new Array();
+let webnnNativeOutputArray = new Array();
 
 $(document).ready(() => {
   $('.icdisplay').hide();
@@ -51,14 +53,15 @@ $('#layoutBtns .btn').on('change', async (e) => {
 
 // Click trigger to do inference with <img> element
 $('#img').click(async () => {
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
-  if (stream !== null) {
-    stopCamera();
-  }
-  inputType = 'image';
-  $('#pickimage').show();
-  $('.shoulddisplay').hide();
-  await main();
+  // if (inputType === 'camera') cancelAnimationFrame(rafReq);
+  // if (stream !== null) {
+  //   stopCamera();
+  // }
+  // inputType = 'image';
+  // $('#pickimage').show();
+  // $('.shoulddisplay').hide();
+  // await main();
+  await iterateLayers();
 });
 
 $('#imageFile').change((e) => {
@@ -83,6 +86,71 @@ $('#cam').click(async () => {
   $('.shoulddisplay').hide();
   await main();
 });
+
+function switchWebnnNative(webnn_native) {
+  isFirstTimeLoad = true;
+  // Save webnn-polyfill environment
+  if (navigator.polyfill_ml == undefined) {
+    navigator.polyfill_ml = navigator.ml;
+    global.polyfill_MLContext = global.MLContext
+    global.polyfill_MLGraphBuilder = global.MLGraphBuilder
+    global.polyfill_MLGraph = global.MLGraph
+    global.polyfill_MLOperand = global.MLOperand
+  }
+  
+  if (webnn_native) {
+    console.log("=================webnn_native");
+    navigator.ml = navigator.native_ml;
+    global.MLContext = global.native_MLContext
+    global.MLGraphBuilder = global.native_MLGraphBuilder
+    global.MLGraph = global.native_MLGraph
+    global.MLOperand = global.native_MLOperand
+  } else {
+    console.log("=================not webnn_native");
+    navigator.ml = navigator.polyfill_ml;
+    global.MLContext = global.polyfill_MLContext
+    global.MLGraphBuilder = global.polyfill_MLGraphBuilder
+    global.MLGraph = global.polyfill_MLGraph
+    global.MLOperand = global.polyfill_MLOperand
+  }
+}
+
+export async function iterateLayers() {
+  layout = 'nhwc';
+  const inputBuffer = getInputTensor(imgElement, inputOptions);
+
+  // Iterate operands with webnn-polyfill.
+  switchWebnnNative(false);
+  await main();
+  console.log("===========operandArray length " + netInstance.operandArray.length);
+  for (let i = 25; i < netInstance.operandArray.length; ++i) {
+    netInstance.build(netInstance.operandArray[i]);
+    let outputBuffer =
+        new Float32Array(sizeOfShape(netInstance.outputDimensions));
+    outputBuffer.fill(0);
+    netInstance.compute(inputBuffer, outputBuffer);
+    webnnPolyfillOutputArray.push(outputBuffer);
+  }
+
+  // Iterate operands with webnn-native.
+  switchWebnnNative(true);
+  await main();
+  for (let i = 25; i < netInstance.operandArray.length; ++i) {
+    netInstance.build(netInstance.operandArray[i]);
+    let outputBuffer =
+        new Float32Array(sizeOfShape(netInstance.outputDimensions));
+    outputBuffer.fill(0);
+    netInstance.compute(inputBuffer, outputBuffer);
+    webnnNativeOutputArray.push(outputBuffer);
+  }
+
+  // Compare webnn-native the output buffer array with webnn-polyfill.
+  for (let i = 0; i < webnnNativeOutputArray.length; ++i) {
+    console.log(i);
+    console.log(webnnPolyfillOutputArray[i]);
+    checkValue(webnnNativeOutputArray[i], webnnPolyfillOutputArray[i]);
+  }
+}
 
 function loadRenderUI() {
   const blurSlider = document.getElementById('blurSlider');
@@ -201,7 +269,7 @@ async function fetchLabels(url) {
 
 async function getMediaStream() {
   // Support 'user' facing mode at present
-  const constraints = {audio: false, video: {facingMode: 'user'}};
+  const constraints = { audio: false, video: { facingMode: 'user' } };
   stream = await navigator.mediaDevices.getUserMedia(constraints);
 }
 
@@ -300,7 +368,7 @@ export async function main() {
 
     if (numRuns < 1) {
       addWarning('The value of param numRuns must be greater than or equal' +
-          ' to 1.');
+        ' to 1.');
       return;
     }
     // Only do load() and build() when model first time loads and
@@ -315,7 +383,7 @@ export async function main() {
       inputOptions = netInstance.inputOptions;
       labels = await fetchLabels(inputOptions.labelUrl);
       outputBuffer =
-          new Float32Array(sizeOfShape(netInstance.outputDimensions));
+        new Float32Array(sizeOfShape(netInstance.outputDimensions));
       isFirstTimeLoad = false;
       console.log(`- Model name: ${modelName}, Model layout: ${layout} -`);
       // UI shows model loading progress
@@ -348,7 +416,7 @@ export async function main() {
         start = performance.now();
         netInstance.compute(inputBuffer, outputBuffer);
         computeTime = (performance.now() - start).toFixed(2);
-        console.log(`  compute time ${i+1}: ${computeTime} ms`);
+        console.log(`  compute time ${i + 1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));
       }
       if (numRuns > 1) {

@@ -26,11 +26,12 @@
           </label>
         </div>
       </div>
-      <div class ="col-8">
+      <div class="col-8">
         <div class="btn-group-toggle" data-toggle="buttons" id="modelBtns">
           <label class="mr-3">Model: </label>
           <label class="btn btn-outline-info btn-sm mr-2 active">
-            <input type="radio" name="model" id="deeplabv3mobilenetv2" autocomplete="off" checked>DeepLab V3 MobileNet V2
+            <input type="radio" name="model" id="deeplabv3mobilenetv2" autocomplete="off" checked>DeepLab V3 MobileNet
+            V2
           </label>
         </div>
       </div>
@@ -157,8 +158,12 @@
     <div class='row mt-1 text-center' id='pickimage'>
       <div class='col'>
         <label class='btn btn-outline-info shoulddisplay' style='display: none;'>
-          <input type='file' id='imageFile' accept='image/*' hidden />
-          <span>Pick Image</span>
+          <!-- <input type='file' id='imageFile' accept='image/*' hidden />
+          <span>Pick Image</span> -->
+
+          <button onclick="switchBackend()">
+            switch backend
+          </button>
         </label>
       </div>
     </div>
@@ -183,17 +188,45 @@
     integrity="sha384-B4gt1jrGC7Jh4AgTPSdUtOBvfO8shuf57BaghqFfPlYxofvL8/KUEfYiJOMMV+rV"
     crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@jaames/iro@5"></script>
-  <script src="https://webmachinelearning.github.io/webnn-polyfill/dist/webnn-polyfill.js"></script>
+  <script src="../webnn-polyfill.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.8.0/dist/tf.min.js"
-    integrity="sha256-B72Do2A4yC67Y3aXueG3wQXWYjtr5RlI1D2jYDJJYsw="
-    crossorigin="anonymous"></script>
+    integrity="sha256-B72Do2A4yC67Y3aXueG3wQXWYjtr5RlI1D2jYDJJYsw=" crossorigin="anonymous"></script>
   <script>
     // To restore module after loading 3rd-party libraries.
     if (window.tempModule) module = window.tempModule;
+
+    
+    var native = true;
+    function switchBackend() {
+      // Save webnn-polyfill environment
+      if (global.navigator.polyfill_ml == undefined) {
+        global.navigator.polyfill_ml = global.navigator.ml;
+        global.polyfill_MLContext = global.MLContext
+        global.polyfill_MLGraphBuilder = global.MLGraphBuilder
+        global.polyfill_MLGraph = global._MLGraph
+        global.polyfill_MLOperand = global.MLOperand
+      }
+      
+      if (native == true) {
+        global.navigator.ml = global.navigator.native_ml;
+        global.MLContext = global.native_MLContext
+        global.MLGraphBuilder = global.native_MLGraphBuilder
+        global.MLGraph = global.native_MLGraph
+        global.MLOperand = global.native_MLOperand
+        native = false;
+      } else {
+        global.navigator.ml = global.navigator.polyfill_ml;
+        global.MLContext = global.polyfill_MLContext
+        global.MLGraphBuilder = global.polyfill_MLGraphBuilder
+        global.MLGraph = global.polyfill_MLGraph
+        global.MLOperand = global.polyfill_MLOperand
+        native = true;
+      }
+    }
   </script>
   <script type="module">
-    import {main} from './main.js';
-    import {setPolyfillBackend} from '../common/utils.js';
+    import { main } from './main.js';
+    import { setPolyfillBackend } from '../common/utils.js';
 
     window.onload = async () => {
       // There's bug when using 'dilations' options with WebGL backend,
@@ -204,6 +237,7 @@
       await setPolyfillBackend(backend);
       await main();
     }
+
   </script>
 </body>
 

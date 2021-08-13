@@ -17,6 +17,7 @@ export class DeepLabV3MNV2Nhwc {
       inputDimensions: [1, 513, 513, 3],
     };
     this.outputDimensions = [1, 513, 513, 21];
+    this.operandArray = new Array();
   }
 
   async buildConv_(
@@ -142,6 +143,34 @@ export class DeepLabV3MNV2Nhwc {
     const conv6 = await this.buildConv_(conv5, 'logits_semantic', '', false);
     const resample1 = this.builder_.resample(
         conv6, {sizes: [1, 65, 65, 21], mode: 'linear'});
+    // push all the operands into "operandArray".
+    this.operandArray.push(conv0);
+    this.operandArray.push(conv1);
+    this.operandArray.push(conv2);
+    this.operandArray.push(conv3);
+    this.operandArray.push(conv4);
+    this.operandArray.push(conv5);
+    this.operandArray.push(conv6);
+    this.operandArray.push(bottleneck0);
+    this.operandArray.push(bottleneck1);
+    this.operandArray.push(bottleneck2);
+    this.operandArray.push(bottleneck3);
+    this.operandArray.push(bottleneck4);
+    this.operandArray.push(bottleneck5);
+    this.operandArray.push(bottleneck6);
+    this.operandArray.push(bottleneck7);
+    this.operandArray.push(bottleneck8);
+    this.operandArray.push(bottleneck9);
+    this.operandArray.push(bottleneck10);
+    this.operandArray.push(bottleneck11);
+    this.operandArray.push(bottleneck12);
+    this.operandArray.push(bottleneck13);
+    this.operandArray.push(bottleneck14);
+    this.operandArray.push(bottleneck15);
+    this.operandArray.push(averagePool2d);
+    this.operandArray.push(resample0);
+    this.operandArray.push(concat);
+    this.operandArray.push(resample1);
     return this.builder_.resample(
         resample1, {sizes: [1, 513, 513, 21], mode: 'linear'});
   }
