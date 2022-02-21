@@ -1,12 +1,13 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, createGPUBuffer, readbackGPUBuffer} from '../common/utils.js';
 
 /* eslint max-len: ["error", {"code": 120}] */
 
 // MobileNet V2 model with 'nhwc' input layout
 export class MobileNetV2Nhwc {
   constructor() {
+    this.device_ = null;
     this.builder_ = null;
     this.graph_ = null;
     this.weightsUrl_ = '../test-data/models/mobilenetv2_nhwc/weights/';
@@ -22,9 +23,9 @@ export class MobileNetV2Nhwc {
 
   async buildConv_(input, weightsSubName, biasSubName, relu6, options) {
     const weightsName = this.weightsUrl_ + 'Const_' + weightsSubName + '.npy';
-    const weights = await buildConstantByNpy(this.builder_, weightsName);
+    const weights = await buildConstantByNpy(this.device_, this.builder_, weightsName);
     const biasName = this.weightsUrl_ + 'MobilenetV2_' + biasSubName + '_bias.npy';
-    const bias = await buildConstantByNpy(this.builder_, biasName);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
     options.inputLayout = 'nhwc';
     options.bias = bias;
     if (relu6) {
@@ -58,7 +59,9 @@ export class MobileNetV2Nhwc {
   }
 
   async load(devicePreference) {
-    const context = navigator.ml.createContext({devicePreference});
+    const adaptor = await navigator.gpu.requestAdapter();
+    this.device_ = await adaptor.requestDevice();
+    const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const strides = [2, 2];
     const autoPad = 'same-upper';
@@ -126,9 +129,12 @@ export class MobileNetV2Nhwc {
     }
   }
 
-  compute(inputBuffer, outputBuffer) {
-    const inputs = {'input': inputBuffer};
-    const outputs = {'output': outputBuffer};
+  async compute(inputBuffer, outputBuffer) {
+    const inputGPUBuffer = await createGPUBuffer(this.device_, inputBuffer.length, inputBuffer);
+    const inputs = {'input': {resource: inputGPUBuffer}};
+    const outputGPUBuffer = await createGPUBuffer(this.device_, outputBuffer.length);
+    const outputs = {'output': {resource: outputGPUBuffer}};
     this.graph_.compute(inputs, outputs);
+    outputBuffer.set(await readbackGPUBuffer(this.device_, outputBuffer.length, outputGPUBuffer));
   }
 }

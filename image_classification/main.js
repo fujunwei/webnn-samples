@@ -138,7 +138,7 @@ async function renderCamStream() {
   const inputCanvas = utils.getVideoFrame(camElement);
   console.log('- Computing... ');
   const start = performance.now();
-  netInstance.compute(inputBuffer, outputBuffer);
+  await netInstance.compute(inputBuffer, outputBuffer);
   computeTime = (performance.now() - start).toFixed(2);
   console.log(`  done in ${computeTime} ms.`);
   drawInput(inputCanvas, 'camInCanvas');
@@ -246,7 +246,7 @@ async function main() {
         lastDevicePreference != devicePreference) {
       if (lastDevicePreference != devicePreference) {
         // Set polyfill backend
-        await utils.setPolyfillBackend(devicePreference);
+        // await utils.setPolyfillBackend(devicePreference);
         lastDevicePreference = devicePreference;
       }
       if (netInstance !== null) {
@@ -285,11 +285,11 @@ async function main() {
       let medianComputeTime;
       if (numRuns > 1) {
         // Do warm up
-        netInstance.compute(inputBuffer, outputBuffer);
+        await netInstance.compute(inputBuffer, outputBuffer);
       }
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        netInstance.compute(inputBuffer, outputBuffer);
+        await netInstance.compute(inputBuffer, outputBuffer);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));

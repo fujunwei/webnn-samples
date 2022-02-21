@@ -26,7 +26,32 @@ export async function getBufferFromUrl(url) {
   return arrayBuffer;
 }
 
-export async function buildConstantByNpy(builder, url) {
+export async function createGPUBuffer(device, size, data = undefined) {
+  const sizeInBytes = size * Float32Array.BYTES_PER_ELEMENT;
+  const gpuBuffer = device.createBuffer({size: sizeInBytes, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
+  if (data !== undefined) {
+    const uploadBuffer = device.createBuffer({size: sizeInBytes, usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC});
+    await uploadBuffer.mapAsync(GPUMapMode.WRITE);
+    new Float32Array(uploadBuffer.getMappedRange()).set(data);
+    uploadBuffer.unmap();
+    const uploadEncoder = device.createCommandEncoder();
+    uploadEncoder.copyBufferToBuffer(uploadBuffer, 0, gpuBuffer, 0, sizeInBytes);
+    device.queue.submit([uploadEncoder.finish()]);
+  }
+  return gpuBuffer;
+}
+
+export async function readbackGPUBuffer(device, size, gpuBuffer) {
+  const sizeInBytes = size * Float32Array.BYTES_PER_ELEMENT;
+  const readbackBuffer = device.createBuffer({size: sizeInBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+  const readbackEncoder = device.createCommandEncoder();
+  readbackEncoder.copyBufferToBuffer(gpuBuffer, 0, readbackBuffer, 0, sizeInBytes);
+  device.queue.submit([readbackEncoder.finish()]);
+  await readbackBuffer.mapAsync(GPUMapMode.READ);
+  return new Float32Array(readbackBuffer.getMappedRange());
+}
+
+export async function buildConstantByNpy(device, builder, url) {
   const dataTypeMap = new Map([
     ['f2', {type: 'float16', array: Uint16Array}],
     ['f4', {type: 'float32', array: Float32Array}],
@@ -56,7 +81,7 @@ export async function buildConstantByNpy(builder, url) {
     typedArray[i] = dataView[`get` + type[0].toUpperCase() + type.substr(1)](
         i * TypedArrayConstructor.BYTES_PER_ELEMENT, littleEndian);
   }
-  return builder.constant({type, dimensions}, typedArray);
+  return builder.constant({type, dimensions}, {resource: await createGPUBuffer(device, sizeOfShape(dimensions), typedArray)});
 }
 
 // Convert video frame to a canvas element

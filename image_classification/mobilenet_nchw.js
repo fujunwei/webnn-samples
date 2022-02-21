@@ -1,10 +1,11 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, createGPUBuffer, readbackGPUBuffer} from '../common/utils.js';
 
 // MobileNet V2 model with 'nchw' input layout
 export class MobileNetV2Nchw {
   constructor() {
+    this.device_ = null;
     this.builder_ = null;
     this.graph_ = null;
     this.weightsUrl_ = '../test-data/models/mobilenetv2_nchw/weights/';
@@ -23,10 +24,10 @@ export class MobileNetV2Nchw {
     const prefix = this.weightsUrl_ + 'conv_' + name;
     const weightsName = prefix + '_weight.npy';
     const weights =
-        await buildConstantByNpy(this.builder_, weightsName);
+        await buildConstantByNpy(this.device_, this.builder_, weightsName);
     const biasName = prefix + '_bias.npy';
     const bias =
-        await buildConstantByNpy(this.builder_, biasName);
+        await buildConstantByNpy(this.device_, this.builder_, biasName);
     options.bias = bias;
     if (relu6) {
       // implement `relu6` by `clamp` of  WebNN API
@@ -40,9 +41,9 @@ export class MobileNetV2Nchw {
   async buildGemm_(input, name) {
     const prefix = this.weightsUrl_ + 'gemm_' + name;
     const weightsName = prefix + '_weight.npy';
-    const weights = await buildConstantByNpy(this.builder_, weightsName);
+    const weights = await buildConstantByNpy(this.device_, this.builder_, weightsName);
     const biasName = prefix + '_bias.npy';
-    const bias = await buildConstantByNpy(this.builder_, biasName);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
     const options = {c: bias, bTranspose: true};
     return this.builder_.gemm(input, weights, options);
   }
@@ -67,7 +68,9 @@ export class MobileNetV2Nchw {
   }
 
   async load(devicePreference) {
-    const context = navigator.ml.createContext({devicePreference});
+    const adaptor = await navigator.gpu.requestAdapter();
+    this.device_ = await adaptor.requestDevice();
+    const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const data = this.builder_.input('input',
         {type: 'float32', dimensions: this.inputOptions.inputDimensions});
@@ -128,9 +131,12 @@ export class MobileNetV2Nchw {
     }
   }
 
-  compute(inputBuffer, outputBuffer) {
-    const inputs = {'input': inputBuffer};
-    const outputs = {'output': outputBuffer};
+  async compute(inputBuffer, outputBuffer) {
+    const inputGPUBuffer = await createGPUBuffer(this.device_, inputBuffer.length, inputBuffer);
+    const inputs = {'input': {resource: inputGPUBuffer}};
+    const outputGPUBuffer = await createGPUBuffer(this.device_, outputBuffer.length);
+    const outputs = {'output': {resource: outputGPUBuffer}};
     this.graph_.compute(inputs, outputs);
+    outputBuffer.set(await readbackGPUBuffer(this.device_, outputBuffer.length, outputGPUBuffer));
   }
 }
