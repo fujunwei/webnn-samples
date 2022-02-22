@@ -8,6 +8,8 @@ export class MobileNetV2Nchw {
     this.device_ = null;
     this.builder_ = null;
     this.graph_ = null;
+    this.inputGPUBuffer_ = null;
+    this.outputGPUBuffer_ = null;
     this.weightsUrl_ = '../test-data/models/mobilenetv2_nchw/weights/';
     this.inputOptions = {
       mean: [0.485, 0.456, 0.406],
@@ -132,11 +134,24 @@ export class MobileNetV2Nchw {
   }
 
   async compute(inputBuffer, outputBuffer) {
-    const inputGPUBuffer = await createGPUBuffer(this.device_, inputBuffer.length, inputBuffer);
-    const inputs = {'input': {resource: inputGPUBuffer}};
-    const outputGPUBuffer = await createGPUBuffer(this.device_, outputBuffer.length);
-    const outputs = {'output': {resource: outputGPUBuffer}};
-    this.graph_.compute(inputs, outputs);
-    outputBuffer.set(await readbackGPUBuffer(this.device_, outputBuffer.length, outputGPUBuffer));
+    const inputSizeInBytes = inputBuffer.length * Float32Array.BYTES_PER_ELEMENT;
+    const outputSizeInBytes = outputBuffer.length * Float32Array.BYTES_PER_ELEMENT;
+    if (this.inputGPUBuffer_ === null) {
+      this.inputGPUBuffer_ = this.device_.createBuffer({size: inputSizeInBytes, usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC});
+      this.outputGPUBuffer_ = this.device_.createBuffer({size: outputSizeInBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+      this.internalGPUBuffer_ = this.device_.createBuffer({size: inputSizeInBytes, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
+    }
+    await this.inputGPUBuffer_.mapAsync(GPUMapMode.WRITE);
+    new Float32Array(this.inputGPUBuffer_.getMappedRange()).set(inputBuffer);
+    this.inputGPUBuffer_.unmap();
+    this.graph_.compute({'input': {resource: this.inputGPUBuffer_}}, {'output': {resource: this.outputGPUBuffer_}});
+    // Uncomment following code to test the buffer uploading and readback performance.
+    // const encoder = this.device_.createCommandEncoder();
+    // encoder.copyBufferToBuffer(this.inputGPUBuffer_, 0, this.internalGPUBuffer_, 0, inputSizeInBytes);
+    // encoder.copyBufferToBuffer(this.internalGPUBuffer_, 0, this.outputGPUBuffer_, 0, outputSizeInBytes);
+    // this.device_.queue.submit([encoder.finish()]);
+    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    this.outputGPUBuffer_.unmap();
   }
 }

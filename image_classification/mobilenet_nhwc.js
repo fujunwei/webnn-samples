@@ -11,6 +11,8 @@ export class MobileNetV2Nhwc {
     this.builder_ = null;
     this.graph_ = null;
     this.weightsUrl_ = '../test-data/models/mobilenetv2_nhwc/weights/';
+    this.inputGPUBuffer_ = null;
+    this.outputGPUBuffer_ = null;
     this.inputOptions = {
       mean: [127.5, 127.5, 127.5],
       std: [127.5, 127.5, 127.5],
@@ -130,11 +132,18 @@ export class MobileNetV2Nhwc {
   }
 
   async compute(inputBuffer, outputBuffer) {
-    const inputGPUBuffer = await createGPUBuffer(this.device_, inputBuffer.length, inputBuffer);
-    const inputs = {'input': {resource: inputGPUBuffer}};
-    const outputGPUBuffer = await createGPUBuffer(this.device_, outputBuffer.length);
-    const outputs = {'output': {resource: outputGPUBuffer}};
-    this.graph_.compute(inputs, outputs);
-    outputBuffer.set(await readbackGPUBuffer(this.device_, outputBuffer.length, outputGPUBuffer));
+    const inputSizeInBytes = inputBuffer.length * Float32Array.BYTES_PER_ELEMENT;
+    const outputSizeInBytes = outputBuffer.length * Float32Array.BYTES_PER_ELEMENT;
+    if (this.inputGPUBuffer_ === null) {
+      this.inputGPUBuffer_ = this.device_.createBuffer({size: inputSizeInBytes, usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC});
+      this.outputGPUBuffer_ = this.device_.createBuffer({size: outputSizeInBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+    }
+    await this.inputGPUBuffer_.mapAsync(GPUMapMode.WRITE);
+    new Float32Array(this.inputGPUBuffer_.getMappedRange()).set(inputBuffer);
+    this.inputGPUBuffer_.unmap();
+    this.graph_.compute({'input': {resource: this.inputGPUBuffer_}}, {'output': {resource: this.outputGPUBuffer_}});
+    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    this.outputGPUBuffer_.unmap();
   }
 }
