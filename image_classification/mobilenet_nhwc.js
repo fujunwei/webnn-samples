@@ -135,12 +135,10 @@ export class MobileNetV2Nhwc {
     const inputSizeInBytes = inputBuffer.length * Float32Array.BYTES_PER_ELEMENT;
     const outputSizeInBytes = outputBuffer.length * Float32Array.BYTES_PER_ELEMENT;
     if (this.inputGPUBuffer_ === null) {
-      this.inputGPUBuffer_ = this.device_.createBuffer({size: inputSizeInBytes, usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC});
+      this.inputGPUBuffer_ = this.device_.createBuffer({size: inputSizeInBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
       this.outputGPUBuffer_ = this.device_.createBuffer({size: outputSizeInBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
     }
-    await this.inputGPUBuffer_.mapAsync(GPUMapMode.WRITE);
-    new Float32Array(this.inputGPUBuffer_.getMappedRange()).set(inputBuffer);
-    this.inputGPUBuffer_.unmap();
+    this.device_.queue.writeBuffer(this.inputGPUBuffer_, 0, inputBuffer.buffer, 0, inputSizeInBytes);
     this.graph_.compute({'input': {resource: this.inputGPUBuffer_}}, {'output': {resource: this.outputGPUBuffer_}});
     await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
     outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
