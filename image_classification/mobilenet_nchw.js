@@ -1,6 +1,6 @@
 'use strict';
 
-import {buildConstantByNpy, createGPUBuffer, readbackGPUBuffer} from '../common/utils.js';
+import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
 
 // MobileNet V2 model with 'nchw' input layout
 export class MobileNetV2Nchw {
@@ -8,8 +8,6 @@ export class MobileNetV2Nchw {
     this.device_ = null;
     this.builder_ = null;
     this.graph_ = null;
-    this.inputGPUBuffer_ = null;
-    this.outputGPUBuffer_ = null;
     this.weightsUrl_ = '../test-data/models/mobilenetv2_nchw/weights/';
     this.inputOptions = {
       mean: [0.485, 0.456, 0.406],
@@ -20,6 +18,10 @@ export class MobileNetV2Nchw {
       inputDimensions: [1, 3, 224, 224],
     };
     this.outputDimensions = [1, 1000];
+    this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.inputGPUBuffer_ = null;
+    this.outputGPUBuffer_ = null;
   }
 
   async buildConv_(input, name, relu6 = true, options = {}) {
@@ -123,6 +125,9 @@ export class MobileNetV2Nchw {
 
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
+    this.inputGPUBuffer_ = this.device_.createBuffer({size: this.inputSizeInBytes_, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
+    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+    // this.internalGPUBuffer_ = this.device_.createBuffer({size: this.inputSizeInBytes_, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
   }
 
   // Release the constant tensors of a model
@@ -134,19 +139,12 @@ export class MobileNetV2Nchw {
   }
 
   async compute(inputBuffer, outputBuffer) {
-    const inputSizeInBytes = inputBuffer.length * Float32Array.BYTES_PER_ELEMENT;
-    const outputSizeInBytes = outputBuffer.length * Float32Array.BYTES_PER_ELEMENT;
-    if (this.inputGPUBuffer_ === null) {
-      this.inputGPUBuffer_ = this.device_.createBuffer({size: inputSizeInBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
-      this.outputGPUBuffer_ = this.device_.createBuffer({size: outputSizeInBytes, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
-      this.internalGPUBuffer_ = this.device_.createBuffer({size: inputSizeInBytes, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
-    }
-    this.device_.queue.writeBuffer(this.inputGPUBuffer_, 0, inputBuffer.buffer, 0, inputSizeInBytes);
+    this.device_.queue.writeBuffer(this.inputGPUBuffer_, 0, inputBuffer.buffer, 0, this.inputSizeInBytes_);
     this.graph_.compute({'input': {resource: this.inputGPUBuffer_}}, {'output': {resource: this.outputGPUBuffer_}});
     // Uncomment following code to test the buffer uploading and readback performance.
     // const encoder = this.device_.createCommandEncoder();
-    // encoder.copyBufferToBuffer(this.inputGPUBuffer_, 0, this.internalGPUBuffer_, 0, inputSizeInBytes);
-    // encoder.copyBufferToBuffer(this.internalGPUBuffer_, 0, this.outputGPUBuffer_, 0, outputSizeInBytes);
+    // encoder.copyBufferToBuffer(this.inputGPUBuffer_, 0, this.internalGPUBuffer_, 0, this.inputSizeInBytes_);
+    // encoder.copyBufferToBuffer(this.internalGPUBuffer_, 0, this.outputGPUBuffer_, 0, this.outputSizeInBytes_);
     // this.device_.queue.submit([encoder.finish()]);
     await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
     outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
