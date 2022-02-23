@@ -1,10 +1,11 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
 
 // SqueezeNet 1.1 model with 'nchw' input layout
 export class SqueezeNetNchw {
   constructor() {
+    this.device_ = null;
     this.builder_ = null;
     this.graph_ = null;
     this.weightsUrl_ = '../test-data/models/squeezenet1.1_nchw/weights/';
@@ -17,14 +18,18 @@ export class SqueezeNetNchw {
       inputDimensions: [1, 3, 224, 224],
     };
     this.outputDimensions = [1, 1000];
+    this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.inputGPUBuffer_ = null;
+    this.outputGPUBuffer_ = null;
   }
 
   async buildConv_(input, name, options = {}) {
     const prefix = this.weightsUrl_ + 'squeezenet0_' + name;
     const weightsName = prefix + '_weight.npy';
-    const weights = await buildConstantByNpy(this.builder_, weightsName);
+    const weights = await buildConstantByNpy(this.device_, this.builder_, weightsName);
     const biasName = prefix + '_bias.npy';
-    const bias = await buildConstantByNpy(this.builder_, biasName);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
     options.bias = bias;
     options.activation = this.builder_.relu();
     return this.builder_.conv2d(input, weights, options);
@@ -39,7 +44,9 @@ export class SqueezeNetNchw {
   }
 
   async load(devicePreference) {
-    const context = navigator.ml.createContext({devicePreference});
+    const adaptor = await navigator.gpu.requestAdapter();
+    this.device_ = await adaptor.requestDevice();
+    const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const data = this.builder_.input('input',
         {type: 'float32', dimensions: this.inputOptions.inputDimensions});
@@ -67,6 +74,8 @@ export class SqueezeNetNchw {
 
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
+    this.inputGPUBuffer_ = this.device_.createBuffer({size: this.inputSizeInBytes_, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
+    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
   }
 
   // Release the constant tensors of a model
@@ -77,9 +86,11 @@ export class SqueezeNetNchw {
     }
   }
 
-  compute(inputBuffer, outputBuffer) {
-    const inputs = {'input': inputBuffer};
-    const outputs = {'output': outputBuffer};
-    this.graph_.compute(inputs, outputs);
+  async compute(inputBuffer, outputBuffer) {
+    this.device_.queue.writeBuffer(this.inputGPUBuffer_, 0, inputBuffer.buffer, 0, this.inputSizeInBytes_);
+    this.graph_.compute({'input': {resource: this.inputGPUBuffer_}}, {'output': {resource: this.outputGPUBuffer_}});
+    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    this.outputGPUBuffer_.unmap();
   }
 }
