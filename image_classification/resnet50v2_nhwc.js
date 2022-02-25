@@ -1,6 +1,6 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
 
 const autoPad = 'same-upper';
 const strides = [2, 2];
@@ -20,6 +20,10 @@ export class ResNet50V2Nhwc {
       inputDimensions: [1, 224, 224, 3],
     };
     this.outputDimensions = [1, 1001];
+    this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.inputGPUBuffer_ = null;
+    this.outputGPUBuffer_ = null;
   }
 
   async buildConv_(input, nameIndices, options = {}, relu = true) {
@@ -40,9 +44,9 @@ export class ResNet50V2Nhwc {
       prefix += 'conv' + nameIndices[2];
     }
     const weightsName = prefix + '_weights.npy';
-    const weights = await buildConstantByNpy(this.builder_, weightsName);
+    const weights = await buildConstantByNpy(this.device_, this.builder_, weightsName);
     const biasName = prefix + '_Conv2D_bias.npy';
-    const bias = await buildConstantByNpy(this.builder_, biasName);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
     options.inputLayout = layout;
     options.filterLayout = 'ohwi';
     options.bias = bias;
@@ -61,9 +65,9 @@ export class ResNet50V2Nhwc {
           `block${nameIndices[0]}_unit_${nameIndices[1]}_bottleneck_v2_preact`;
     }
     const mulParamName = prefix + '_FusedBatchNorm_mul_0_param.npy';
-    const mulParam = await buildConstantByNpy(this.builder_, mulParamName);
+    const mulParam = await buildConstantByNpy(this.device_, this.builder_, mulParamName);
     const addParamName = prefix + '_FusedBatchNorm_add_param.npy';
-    const addParam = await buildConstantByNpy(this.builder_, addParamName);
+    const addParam = await buildConstantByNpy(this.device_, this.builder_, addParamName);
     return this.builder_.relu(
         this.builder_.add(this.builder_.mul(input, mulParam), addParam));
   }
@@ -83,10 +87,7 @@ export class ResNet50V2Nhwc {
     if (!downsample && shortcut) {
       residual = this.builder_.maxPool2d(
           input, {windowDimensions: [1, 1], strides, layout, autoPad});
-      const padding = this.builder_.constant(
-          {type: 'int32', dimensions: [4, 2]},
-          new Int32Array([0, 0, 1, 1, 1, 1, 0, 0]));
-      const pad = this.builder_.pad(conv1, padding);
+      const pad = this.builder_.pad(conv1, [0, 0, 1, 1, 1, 1, 0, 0]);
       conv2 = await this.buildConv_(pad, nameIndices.concat(['2']), {strides});
     } else {
       conv2 = await this.buildConv_(
@@ -98,15 +99,13 @@ export class ResNet50V2Nhwc {
   }
 
   async load(devicePreference) {
-    const context = navigator.ml.createContext({devicePreference});
+    const adaptor = await navigator.gpu.requestAdapter();
+    this.device_ = await adaptor.requestDevice();
+    const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
-    const padding = this.builder_.constant(
-        {type: 'int32', dimensions: [4, 2]},
-        new Int32Array([0, 0, 3, 3, 3, 3, 0, 0]));
-
     const input = this.builder_.input('input',
         {type: 'float32', dimensions: this.inputOptions.inputDimensions});
-    const pad = this.builder_.pad(input, padding);
+    const pad = this.builder_.pad(input, [0, 0, 3, 3, 3, 3, 0, 0]);
     const conv1 = await this.buildConv_(pad, ['', '', '1'], {strides}, false);
     const pool = this.builder_.maxPool2d(
         conv1, {windowDimensions: [3, 3], strides, layout, autoPad});
@@ -154,8 +153,7 @@ export class ResNet50V2Nhwc {
 
     const fusedBn =
         await this.buildFusedBatchNorm_(bottleneck13, ['postnorm']);
-    const mean = this.builder_.reduceMean(
-        fusedBn, {keepDimensions: true, axes: [1, 2]});
+    const mean = this.builder_.averagePool2d(fusedBn, {layout});
     const conv2 = await this.buildConv_(
         mean, ['', '', 'logits'], {autoPad}, false);
     const reshape = this.builder_.reshape(conv2, [1, -1]);
@@ -164,6 +162,8 @@ export class ResNet50V2Nhwc {
 
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
+    this.inputGPUBuffer_ = this.device_.createBuffer({size: this.inputSizeInBytes_, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
+    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
   }
 
   // Release the constant tensors of a model
@@ -174,9 +174,11 @@ export class ResNet50V2Nhwc {
     }
   }
 
-  compute(inputBuffer, outputBuffer) {
-    const inputs = {'input': inputBuffer};
-    const outputs = {'output': outputBuffer};
-    this.graph_.compute(inputs, outputs);
+  async compute(inputBuffer, outputBuffer) {
+    this.device_.queue.writeBuffer(this.inputGPUBuffer_, 0, inputBuffer.buffer, 0, this.inputSizeInBytes_);
+    this.graph_.compute({'input': {resource: this.inputGPUBuffer_}}, {'output': {resource: this.outputGPUBuffer_}});
+    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    this.outputGPUBuffer_.unmap();
   }
 }

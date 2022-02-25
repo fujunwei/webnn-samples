@@ -1,10 +1,11 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
 
 // ResNet50 V2 model with 'nchw' input layout
 export class ResNet50V2Nchw {
   constructor() {
+    this.device_ = null;
     this.builder_ = null;
     this.graph_ = null;
     this.weightsUrl_ = '../test-data/models/resnet50v2_nchw/weights/';
@@ -17,6 +18,10 @@ export class ResNet50V2Nchw {
       inputDimensions: [1, 3, 224, 224],
     };
     this.outputDimensions = [1, 1000];
+    this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.inputGPUBuffer_ = null;
+    this.outputGPUBuffer_ = null;
   }
 
   async buildConv_(input, name, stageName, options = undefined) {
@@ -28,7 +33,7 @@ export class ResNet50V2Nchw {
       prefix = this.weightsUrl_ + 'resnetv24_conv' + name;
     }
     const weightName = prefix + '_weight.npy';
-    const weight = await buildConstantByNpy(this.builder_, weightName);
+    const weight = await buildConstantByNpy(this.device_, this.builder_, weightName);
     return this.builder_.conv2d(input, weight, options);
   }
 
@@ -44,10 +49,10 @@ export class ResNet50V2Nchw {
     const biasName = prefix + '_beta.npy';
     const meanName = prefix + '_running_mean.npy';
     const varName = prefix + '_running_var.npy';
-    const scale = await buildConstantByNpy(this.builder_, scaleName);
-    const bias = await buildConstantByNpy(this.builder_, biasName);
-    const mean = await buildConstantByNpy(this.builder_, meanName);
-    const variance = await buildConstantByNpy(this.builder_, varName);
+    const scale = await buildConstantByNpy(this.device_, this.builder_, scaleName);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
+    const mean = await buildConstantByNpy(this.device_, this.builder_, meanName);
+    const variance = await buildConstantByNpy(this.device_, this.builder_, varName);
     const options = {scale: scale, bias: bias};
     if (relu) {
       options.activation = this.builder_.relu();
@@ -58,9 +63,9 @@ export class ResNet50V2Nchw {
   async buildGemm_(input, name) {
     const prefix = this.weightsUrl_ + 'resnetv24_dense' + name;
     const weightName = prefix + '_weight.npy';
-    const weight = await buildConstantByNpy(this.builder_, weightName);
+    const weight = await buildConstantByNpy(this.device_, this.builder_, weightName);
     const biasName = prefix + '_bias.npy';
-    const bias = await buildConstantByNpy(this.builder_, biasName);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
     const options = {c: this.builder_.reshape(bias, [1, -1]), bTranspose: true};
     return this.builder_.gemm(input, weight, options);
   }
@@ -90,7 +95,9 @@ export class ResNet50V2Nchw {
   }
 
   async load(devicePreference) {
-    const context = navigator.ml.createContext({devicePreference});
+    const adaptor = await navigator.gpu.requestAdapter();
+    this.device_ = await adaptor.requestDevice();
+    const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const data = this.builder_.input('input',
         {type: 'float32', dimensions: this.inputOptions.inputDimensions});
@@ -150,6 +157,8 @@ export class ResNet50V2Nchw {
 
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
+    this.inputGPUBuffer_ = this.device_.createBuffer({size: this.inputSizeInBytes_, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
+    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
   }
 
   // Release the constant tensors of a model
@@ -160,9 +169,11 @@ export class ResNet50V2Nchw {
     }
   }
 
-  compute(inputBuffer, outputBuffer) {
-    const inputs = {'input': inputBuffer};
-    const outputs = {'output': outputBuffer};
-    this.graph_.compute(inputs, outputs);
+  async compute(inputBuffer, outputBuffer) {
+    this.device_.queue.writeBuffer(this.inputGPUBuffer_, 0, inputBuffer.buffer, 0, this.inputSizeInBytes_);
+    this.graph_.compute({'input': {resource: this.inputGPUBuffer_}}, {'output': {resource: this.outputGPUBuffer_}});
+    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    this.outputGPUBuffer_.unmap();
   }
 }
