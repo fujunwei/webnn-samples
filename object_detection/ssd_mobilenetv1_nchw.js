@@ -1,10 +1,11 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
 
 // SSD MobileNet V1 model with 'nchw' layout, trained on the COCO dataset.
 export class SsdMobilenetV1Nchw {
   constructor() {
+    this.device_ = null;
     this.model_ = null;
     this.builder_ = null;
     this.graph_ = null;
@@ -19,6 +20,14 @@ export class SsdMobilenetV1Nchw {
       std: [127.5, 127.5, 127.5],
       inputDimensions: [1, 3, 300, 300],
     };
+    this.outputBoxesDimensions = [1, 1917, 1, 4];
+    this.outputScoresDimensions = [1, 1917, 91];
+    this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.outputBoxesSizeInBytes_ = sizeOfShape(this.outputBoxesDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.outputScoresSizeInBytes_ = sizeOfShape(this.outputScoresDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.inputGPUBuffers_ = [];
+    this.outputBoxesGPUBuffer_ = null;
+    this.outputScoresGPUBuffer_ = null;
   }
 
   async buildConv_(input, nameArray, relu6 = true, options = {}) {
@@ -53,9 +62,9 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
     }
 
     const weightsName = this.weightsUrl_ + prefix + weightSuffix;
-    const weights = await buildConstantByNpy(this.builder_, weightsName);
+    const weights = await buildConstantByNpy(this.device_, this.builder_, weightsName);
     const biasName = this.biasUrl_ + prefix + biasSuffix;
-    const bias = await buildConstantByNpy(this.builder_, biasName);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
     options.autoPad = 'same-upper';
     options.bias = bias;
     if (relu6) {
@@ -66,7 +75,9 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
   }
 
   async load(devicePreference) {
-    const context = navigator.ml.createContext({devicePreference});
+    const adaptor = await navigator.gpu.requestAdapter();
+    this.device_ = await adaptor.requestDevice();
+    const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const input = this.builder_.input('input',
         {type: 'float32', dimensions: this.inputOptions.inputDimensions});
@@ -235,6 +246,8 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
 
   build(outputOperand) {
     this.graph_ = this.builder_.build(outputOperand);
+    this.outputBoxesGPUBuffer_ = this.device_.createBuffer({size: this.outputBoxesSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+    this.outputScoresGPUBuffer_ = this.device_.createBuffer({size: this.outputScoresSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
   }
 
   // Release the constant tensors of a model
@@ -245,8 +258,31 @@ ${nameArray[1]}_BatchNorm_batchnorm`;
     }
   }
 
-  compute(inputBuffer, outputs) {
-    const inputs = {'input': inputBuffer};
-    this.graph_.compute(inputs, outputs);
+  async compute(inputBuffer, outputs) {
+    let inputGPUBuffer;
+    if (this.inputGPUBuffers_.length) {
+      inputGPUBuffer = this.inputGPUBuffers_.pop();
+    } else {
+      inputGPUBuffer = this.device_.createBuffer({
+        size: this.inputSizeInBytes_,
+        usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC
+      });
+      await inputGPUBuffer.mapAsync(GPUMapMode.WRITE);
+    }
+    new Float32Array(inputGPUBuffer.getMappedRange()).set(inputBuffer);
+    inputGPUBuffer.unmap();
+    this.graph_.compute(
+        {'input': {resource: inputGPUBuffer}},
+        {'boxes': {resource: this.outputBoxesGPUBuffer_},
+         'scores': {resource: this.outputScoresGPUBuffer_}});
+    inputGPUBuffer.mapAsync(GPUMapMode.WRITE).then(() => {
+      this.inputGPUBuffers_.push(inputGPUBuffer);
+    });
+    await this.outputBoxesGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputs.boxes.set(new Float32Array(this.outputBoxesGPUBuffer_.getMappedRange()));
+    this.outputBoxesGPUBuffer_.unmap();
+    await this.outputScoresGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputs.scores.set(new Float32Array(this.outputScoresGPUBuffer_.getMappedRange()));
+    this.outputScoresGPUBuffer_.unmap();
   }
 }

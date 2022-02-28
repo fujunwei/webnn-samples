@@ -1,10 +1,11 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, sizeOfShape, createGPUBuffer} from '../common/utils.js';
 
 // Tiny Yolo V2 model with 'nchw' layout, trained on the Pascal VOC dataset.
 export class TinyYoloV2Nchw {
   constructor() {
+    this.device_ = null;
     this.builder_ = null;
     this.graph_ = null;
     this.weightsUrl_ = '../test-data/models/tiny_yolov2_nchw/weights/';
@@ -16,16 +17,20 @@ export class TinyYoloV2Nchw {
       inputDimensions: [1, 3, 416, 416],
     };
     this.outputDimensions = [1, 125, 13, 13];
+    this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.inputGPUBuffers_ = [];
+    this.outputGPUBuffer_ = null;
   }
 
   async buildConv_(input, name, useBias = false) {
     const prefix = this.weightsUrl_ + 'convolution' + name;
     const weightName = prefix + '_W.npy';
-    const weight = await buildConstantByNpy(this.builder_, weightName);
+    const weight = await buildConstantByNpy(this.device_, this.builder_, weightName);
     const options = {autoPad: 'same-upper'};
     if (useBias) {
       const biasName = prefix + '_B.npy';
-      options.bias = await buildConstantByNpy(this.builder_, biasName);
+      options.bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
     }
     return this.builder_.conv2d(input, weight, options);
   }
@@ -36,10 +41,10 @@ export class TinyYoloV2Nchw {
     const biasName = `${prefix}_B${name}.npy`;
     const meanName = `${prefix}_mean${name}.npy`;
     const varName = `${prefix}_variance${name}.npy`;
-    const scale = await buildConstantByNpy(this.builder_, scaleName);
-    const bias = await buildConstantByNpy(this.builder_, biasName);
-    const mean = await buildConstantByNpy(this.builder_, meanName);
-    const variance = await buildConstantByNpy(this.builder_, varName);
+    const scale = await buildConstantByNpy(this.device_, this.builder_, scaleName);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
+    const mean = await buildConstantByNpy(this.device_, this.builder_, meanName);
+    const variance = await buildConstantByNpy(this.device_, this.builder_, varName);
 
     const batchNorm = this.builder_.batchNormalization(
         input, mean, variance, {scale: scale, bias: bias,
@@ -53,15 +58,19 @@ export class TinyYoloV2Nchw {
   }
 
   async load(devicePreference) {
-    const context = navigator.ml.createContext({devicePreference});
+    const adaptor = await navigator.gpu.requestAdapter();
+    this.device_ = await adaptor.requestDevice();
+    const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const image = this.builder_.input('input',
         {type: 'float32', dimensions: this.inputOptions.inputDimensions});
 
-    const mulScale = this.builder_.constant({type: 'float32',
-      dimensions: [1]}, new Float32Array([0.003921568859368563]));
-    const addBias = this.builder_.constant({type: 'float32',
-      dimensions: [3, 1, 1]}, new Float32Array([0, 0, 0]));
+    const mulScale = this.builder_.constant(
+        { type: 'float32', dimensions: [1] },
+        { resource: await createGPUBuffer(this.device_, sizeOfShape([1]), [0.003921568859368563]) });
+    const addBias = this.builder_.constant(
+        { type: 'float32', dimensions: [3, 1, 1] },
+        { resource: await createGPUBuffer(this.device_, sizeOfShape([3, 1, 1]), [0, 0, 0]) });
     const poolOptions = {
       windowDimensions: [2, 2],
       strides: [2, 2],
@@ -90,6 +99,7 @@ export class TinyYoloV2Nchw {
 
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
+    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
   }
 
   // Release the constant tensors of a model
@@ -100,8 +110,25 @@ export class TinyYoloV2Nchw {
     }
   }
 
-  compute(inputBuffer, outputs) {
-    const inputs = {'input': inputBuffer};
-    this.graph_.compute(inputs, outputs);
+  async compute(inputBuffer, outputs) {
+    let inputGPUBuffer;
+    if (this.inputGPUBuffers_.length) {
+      inputGPUBuffer = this.inputGPUBuffers_.pop();
+    } else {
+      inputGPUBuffer = this.device_.createBuffer({
+        size: this.inputSizeInBytes_,
+        usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC
+      });
+      await inputGPUBuffer.mapAsync(GPUMapMode.WRITE);
+    }
+    new Float32Array(inputGPUBuffer.getMappedRange()).set(inputBuffer);
+    inputGPUBuffer.unmap();
+    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
+    inputGPUBuffer.mapAsync(GPUMapMode.WRITE).then(() => {
+      this.inputGPUBuffers_.push(inputGPUBuffer);
+    });
+    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputs.output.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    this.outputGPUBuffer_.unmap();
   }
 }
