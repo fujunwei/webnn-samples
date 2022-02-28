@@ -20,7 +20,7 @@ export class MobileNetV2Nchw {
     this.outputDimensions = [1, 1000];
     this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
     this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
-    this.inputGPUBuffer_ = null;
+    this.inputGPUBuffers_ = [];
     this.outputGPUBuffer_ = null;
   }
 
@@ -125,9 +125,7 @@ export class MobileNetV2Nchw {
 
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
-    this.inputGPUBuffer_ = this.device_.createBuffer({size: this.inputSizeInBytes_, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
     this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
-    // this.internalGPUBuffer_ = this.device_.createBuffer({size: this.inputSizeInBytes_, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST});
   }
 
   // Release the constant tensors of a model
@@ -139,13 +137,23 @@ export class MobileNetV2Nchw {
   }
 
   async compute(inputBuffer, outputBuffer) {
-    this.device_.queue.writeBuffer(this.inputGPUBuffer_, 0, inputBuffer.buffer, 0, this.inputSizeInBytes_);
-    this.graph_.compute({'input': {resource: this.inputGPUBuffer_}}, {'output': {resource: this.outputGPUBuffer_}});
-    // Uncomment following code to test the buffer uploading and readback performance.
-    // const encoder = this.device_.createCommandEncoder();
-    // encoder.copyBufferToBuffer(this.inputGPUBuffer_, 0, this.internalGPUBuffer_, 0, this.inputSizeInBytes_);
-    // encoder.copyBufferToBuffer(this.internalGPUBuffer_, 0, this.outputGPUBuffer_, 0, this.outputSizeInBytes_);
-    // this.device_.queue.submit([encoder.finish()]);
+    let inputGPUBuffer;
+    if (this.inputGPUBuffers_.length) {
+      inputGPUBuffer = this.inputGPUBuffers_.pop();
+    } else {
+      console.log('create buffer');
+      inputGPUBuffer = this.device_.createBuffer({
+        size: this.inputSizeInBytes_,
+        usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC
+      });
+      await inputGPUBuffer.mapAsync(GPUMapMode.WRITE);
+    }
+    new Float32Array(inputGPUBuffer.getMappedRange()).set(inputBuffer);
+    inputGPUBuffer.unmap();
+    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
+    inputGPUBuffer.mapAsync(GPUMapMode.WRITE).then(() => {
+      this.inputGPUBuffers_.push(inputGPUBuffer);
+    });
     await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
     outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
     this.outputGPUBuffer_.unmap();
