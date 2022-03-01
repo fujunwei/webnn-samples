@@ -354,11 +354,11 @@ export async function main() {
       let medianComputeTime;
       if (numRuns > 1) {
         // Do warm up
-        netInstance.compute(inputBuffer, outputBuffer);
+        await netInstance.compute(inputBuffer, outputBuffer);
       }
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        netInstance.compute(inputBuffer, outputBuffer);
+        await netInstance.compute(inputBuffer, outputBuffer);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));

@@ -1,10 +1,11 @@
 'use strict';
 
-import {buildConstantByNpy} from '../common/utils.js';
+import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
 
 // DeepLab V3 MobileNet V2 model with 'nhwc' input layout
 export class DeepLabV3MNV2Nhwc {
   constructor() {
+    this.device_ = null;
     this.builder_ = null;
     this.graph_ = null;
     this.weightsUrl_ = '../test-data/models/deeplabv3_mnv2_nhwc/weights/';
@@ -17,6 +18,10 @@ export class DeepLabV3MNV2Nhwc {
       inputDimensions: [1, 513, 513, 3],
     };
     this.outputDimensions = [1, 513, 513, 21];
+    this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
+    this.inputGPUBuffers_ = [];
+    this.outputGPUBuffer_ = null;
   }
 
   async buildConv_(
@@ -31,8 +36,8 @@ export class DeepLabV3MNV2Nhwc {
       weightsName = prefix + '_Conv2D.npy';
       biasName = prefix + '_biases.npy';
     }
-    const weights = await buildConstantByNpy(this.builder_, weightsName);
-    const bias = await buildConstantByNpy(this.builder_, biasName);
+    const weights = await buildConstantByNpy(this.device_, this.builder_, weightsName);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
     options.inputLayout = 'nhwc';
     options.autoPad = 'same-upper';
     if (namePrefix.includes('depthwise')) {
@@ -71,7 +76,9 @@ export class DeepLabV3MNV2Nhwc {
   }
 
   async load(devicePreference) {
-    const context = navigator.ml.createContext({devicePreference});
+    const adaptor = await navigator.gpu.requestAdapter();
+    this.device_ = await adaptor.requestDevice();
+    const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const strides = [2, 2];
     const input = this.builder_.input('input',
@@ -134,6 +141,7 @@ export class DeepLabV3MNV2Nhwc {
 
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
+    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
   }
 
   // Release the constant tensors of a model
@@ -144,9 +152,26 @@ export class DeepLabV3MNV2Nhwc {
     }
   }
 
-  compute(inputBuffer, outputBuffer) {
-    const inputs = {'input': inputBuffer};
-    const outputs = {'output': outputBuffer};
-    this.graph_.compute(inputs, outputs);
+  async compute(inputBuffer, outputBuffer) {
+    let inputGPUBuffer;
+    if (this.inputGPUBuffers_.length) {
+      inputGPUBuffer = this.inputGPUBuffers_.pop();
+    } else {
+      console.log('create buffer');
+      inputGPUBuffer = this.device_.createBuffer({
+        size: this.inputSizeInBytes_,
+        usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC
+      });
+      await inputGPUBuffer.mapAsync(GPUMapMode.WRITE);
+    }
+    new Float32Array(inputGPUBuffer.getMappedRange()).set(inputBuffer);
+    inputGPUBuffer.unmap();
+    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
+    inputGPUBuffer.mapAsync(GPUMapMode.WRITE).then(() => {
+      this.inputGPUBuffers_.push(inputGPUBuffer);
+    });
+    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    this.outputGPUBuffer_.unmap();
   }
 }

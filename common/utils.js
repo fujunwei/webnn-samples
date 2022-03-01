@@ -191,16 +191,20 @@ export async function setPolyfillBackend(device) {
   // Note: 'wasm' backend may run failed on some samples since
   // some ops aren't supported on 'wasm' backend at present
   const backend = device === 'cpu' ? 'wasm' : 'webgl';
-  const tf = navigator.ml.createContext().tf;
-  if (tf) {
-    if (!(await tf.setBackend(backend))) {
-      throw new Error(`Failed to set tf.js backend ${backend}.`);
+  try {
+    const tf = navigator.ml.createContext().tf;
+    if (tf) {
+      if (!(await tf.setBackend(backend))) {
+        throw new Error(`Failed to set tf.js backend ${backend}.`);
+      }
+      await tf.ready();
+      addAlert(
+          `This sample is running on ` +
+          `<a href='https://github.com/webmachinelearning/webnn-polyfill'>` +
+          `WebNN-polyfill</a> with tf.js ${tf.version_core} ` +
+          `<b>${tf.getBackend()}</b> backend.`, 'info');
     }
-    await tf.ready();
-    addAlert(
-        `This sample is running on ` +
-        `<a href='https://github.com/webmachinelearning/webnn-polyfill'>` +
-        `WebNN-polyfill</a> with tf.js ${tf.version_core} ` +
-        `<b>${tf.getBackend()}</b> backend.`, 'info');
+  } catch (e) {
+    console.log(e);
   }
 }
