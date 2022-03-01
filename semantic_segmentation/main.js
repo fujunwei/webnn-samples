@@ -234,7 +234,7 @@ async function renderCamStream() {
   const inputCanvas = utils.getVideoFrame(camElement);
   console.log('- Computing... ');
   const start = performance.now();
-  netInstance.compute(inputBuffer, outputBuffer);
+  await netInstance.compute(inputBuffer, outputBuffer);
   computeTime = (performance.now() - start).toFixed(2);
   console.log(`  done in ${computeTime} ms.`);
   showPerfResult();
