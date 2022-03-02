@@ -74,7 +74,6 @@ export class MobileNetV2Nchw {
   }
 
   async load(devicePreference) {
-    await tf.setBackend('webgpu');
     this.device_ = tf.engine().backendInstance.device;
     const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);

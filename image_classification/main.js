@@ -134,14 +134,12 @@ async function renderCamStream() {
     rafReq = requestAnimationFrame(renderCamStream);
     return;
   }
-  const inputBuffer = utils.getInputTensor(camElement, inputOptions);
-  const inputCanvas = utils.getVideoFrame(camElement);
   console.log('- Computing... ');
   const start = performance.now();
-  await netInstance.computeFromPixels(inputCanvas, outputBuffer);
+  await netInstance.computeFromPixels(camElement, outputBuffer);
   computeTime = (performance.now() - start).toFixed(2);
   console.log(`  done in ${computeTime} ms.`);
-  drawInput(inputCanvas, 'camInCanvas');
+  drawInput(camElement, 'camInCanvas');
   showPerfResult();
   await drawOutput(outputBuffer, labels);
   $('#fps').text(`${(1000/computeTime).toFixed(0)} FPS`);
@@ -176,6 +174,10 @@ function getTopClasses(buffer, labels) {
 
 function drawInput(srcElement, canvasId) {
   const inputCanvas = document.getElementById(canvasId);
+  srcElement.width = srcElement.videoWidth ||
+      srcElement.naturalWidth;
+  srcElement.height = srcElement.videoHeight ||
+      srcElement.naturalHeight;
   const resizeRatio = Math.max(
       Math.max(srcElement.width / maxWidth, srcElement.height / maxHeight), 1);
   const scaledWidth = Math.floor(srcElement.width / resizeRatio);
@@ -226,6 +228,8 @@ function constructNetObject(type) {
 
 async function main() {
   try {
+    await tf.setBackend('webgpu');
+    tf.env().set('WEBGPU_USE_IMPORT', true);
     if (modelName === '') return;
     ui.handleClick(disabledSelectors, true);
     if (isFirstTimeLoad) $('#hint').hide();
@@ -285,11 +289,11 @@ async function main() {
       let medianComputeTime;
       if (numRuns > 1) {
         // Do warm up
-        await netInstance.computeFromPixels(imgElement, outputBuffer);
+        await netInstance.compute(inputBuffer, outputBuffer);
       }
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        await netInstance.computeFromPixels(imgElement, outputBuffer);
+        await netInstance.compute(inputBuffer, outputBuffer);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));
