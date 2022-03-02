@@ -1,6 +1,6 @@
 'use strict';
 
-import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
+import {buildConstantByNpy, sizeOfShape, getInputTensor} from '../common/utils.js';
 
 // MobileNet V2 model with 'nchw' input layout
 export class MobileNetV2Nchw {
@@ -22,6 +22,8 @@ export class MobileNetV2Nchw {
     this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
     this.inputGPUBuffers_ = [];
     this.outputGPUBuffer_ = null;
+    this.inputHeight_ = this.inputOptions.inputDimensions[2];
+    this.inputWidth_ = this.inputOptions.inputDimensions[3];
   }
 
   async buildConv_(input, name, relu6 = true, options = {}) {
@@ -72,8 +74,8 @@ export class MobileNetV2Nchw {
   }
 
   async load(devicePreference) {
-    const adaptor = await navigator.gpu.requestAdapter();
-    this.device_ = await adaptor.requestDevice();
+    await tf.setBackend('webgpu');
+    this.device_ = tf.engine().backendInstance.device;
     const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const data = this.builder_.input('input',
@@ -125,7 +127,11 @@ export class MobileNetV2Nchw {
 
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
-    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+    this.outputGPUBuffer_ = this.device_.createBuffer(
+      {size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+    this.stdTensor_ = tf.tensor1d(this.inputOptions.std);
+    this.meanTensor_ = tf.tensor1d(this.inputOptions.mean);
+    this.normTensor_ = tf.tensor1d([255, 255, 255]);
   }
 
   // Release the constant tensors of a model
@@ -134,6 +140,20 @@ export class MobileNetV2Nchw {
     if (this.graph_ !== null && 'dispose' in this.graph_) {
       this.graph_.dispose();
     }
+  }
+
+  async computeFromPixels(inputElement, outputBuffer) {
+    const inputTensor = tf.tidy(() => {
+      return tf.browser.fromPixels(inputElement).resizeBilinear([this.inputHeight_, this.inputWidth_])
+        .div(this.normTensor_).sub(this.meanTensor_).div(this.stdTensor_).transpose([2, 0, 1]);
+    });
+    tf.engine().backendInstance.submitQueue();
+    const inputGPUBuffer = tf.engine().backendInstance.tensorMap.get(inputTensor.dataId).bufferInfo.buffer;
+    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
+    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    this.outputGPUBuffer_.unmap();
+    inputTensor.dispose();
   }
 
   async compute(inputBuffer, outputBuffer) {
