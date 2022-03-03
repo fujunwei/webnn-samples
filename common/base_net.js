@@ -1,4 +1,4 @@
-import { sizeOfShape } from "../common/utils.js";
+import { sizeOfShape } from "./utils.js";
 
 export class BaseNetwork {
   constructor() {
@@ -47,15 +47,15 @@ export class BaseNetwork {
     }
   }
 
-  async computeGPUTensor(inputTensor, outputBuffer) {
+  async computeGPUTensor(inputTensor, outputBuffer, typedArrayConstructor = Float32Array) {
     const inputGPUBuffer = tf.engine().backendInstance.getBuffer(inputTensor.dataId);
     this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
     await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
-    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    outputBuffer.set(new typedArrayConstructor(this.outputGPUBuffer_.getMappedRange()));
     this.outputGPUBuffer_.unmap();
   }
 
-  async compute(inputBuffer, outputBuffer) {
+  async compute(inputBuffer, outputBuffer, typedArrayConstructor = Float32Array) {
     let inputGPUBuffer;
     if (this.inputGPUBuffers_.length) {
       inputGPUBuffer = this.inputGPUBuffers_.pop();
@@ -74,7 +74,7 @@ export class BaseNetwork {
       this.inputGPUBuffers_.push(inputGPUBuffer);
     });
     await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
-    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    outputBuffer.set(new typedArrayConstructor(this.outputGPUBuffer_.getMappedRange()));
     this.outputGPUBuffer_.unmap();
   }
 }

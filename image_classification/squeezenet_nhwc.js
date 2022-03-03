@@ -1,6 +1,6 @@
 'use strict';
 
-import { BaseNetwork } from './base_net.js';
+import { BaseNetwork } from '../common/base_net.js';
 import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
 
 // SqueezeNet 1.0 model with 'nhwc' layout

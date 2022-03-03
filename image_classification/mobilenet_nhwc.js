@@ -1,7 +1,7 @@
 'use strict';
 
-import {BaseNetwork} from './base_net.js';
-import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
+import {BaseNetwork} from '../common/base_net.js';
+import {buildConstantByNpy} from '../common/utils.js';
 
 /* eslint max-len: ["error", {"code": 120}] */
 

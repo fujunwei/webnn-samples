@@ -1,7 +1,7 @@
 'use strict';
 
-import {BaseNetwork} from './base_net.js';
-import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
+import {BaseNetwork} from '../common/base_net.js';
+import {buildConstantByNpy} from '../common/utils.js';
 
 // ResNet50 V2 model with 'nchw' input layout
 export class ResNet50V2Nchw extends BaseNetwork {
