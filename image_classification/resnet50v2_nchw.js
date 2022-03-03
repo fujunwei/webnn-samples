@@ -1,13 +1,12 @@
 'use strict';
 
+import {BaseNetwork} from './base_net.js';
 import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
 
 // ResNet50 V2 model with 'nchw' input layout
-export class ResNet50V2Nchw {
+export class ResNet50V2Nchw extends BaseNetwork {
   constructor() {
-    this.device_ = null;
-    this.builder_ = null;
-    this.graph_ = null;
+    super();
     this.weightsUrl_ = '../test-data/models/resnet50v2_nchw/weights/';
     this.inputOptions = {
       mean: [0.485, 0.456, 0.406],
@@ -18,10 +17,6 @@ export class ResNet50V2Nchw {
       inputDimensions: [1, 3, 224, 224],
     };
     this.outputDimensions = [1, 1000];
-    this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
-    this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
-    this.inputGPUBuffers_ = [];
-    this.outputGPUBuffer_ = null;
   }
 
   async buildConv_(input, name, stageName, options = undefined) {
@@ -95,8 +90,7 @@ export class ResNet50V2Nchw {
   }
 
   async load(devicePreference) {
-    const adaptor = await navigator.gpu.requestAdapter();
-    this.device_ = await adaptor.requestDevice();
+    await this.init();
     const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const data = this.builder_.input('input',
@@ -153,40 +147,5 @@ export class ResNet50V2Nchw {
     const reshape = this.builder_.reshape(pool2, [1, -1]);
     const gemm = await this.buildGemm_(reshape, '0');
     return this.builder_.softmax(gemm);
-  }
-
-  build(outputOperand) {
-    this.graph_ = this.builder_.build({'output': outputOperand});
-    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
-  }
-
-  // Release the constant tensors of a model
-  dispose() {
-    // dispose() is only available in webnn-polyfill
-    if (this.graph_ !== null && 'dispose' in this.graph_) {
-      this.graph_.dispose();
-    }
-  }
-
-  async compute(inputBuffer, outputBuffer) {
-    let inputGPUBuffer;
-    if (this.inputGPUBuffers_.length) {
-      inputGPUBuffer = this.inputGPUBuffers_.pop();
-    } else {
-      inputGPUBuffer = this.device_.createBuffer({
-        size: this.inputSizeInBytes_,
-        usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC
-      });
-      await inputGPUBuffer.mapAsync(GPUMapMode.WRITE);
-    }
-    new Float32Array(inputGPUBuffer.getMappedRange()).set(inputBuffer);
-    inputGPUBuffer.unmap();
-    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
-    inputGPUBuffer.mapAsync(GPUMapMode.WRITE).then(() => {
-      this.inputGPUBuffers_.push(inputGPUBuffer);
-    });
-    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
-    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
-    this.outputGPUBuffer_.unmap();
   }
 }

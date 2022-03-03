@@ -134,11 +134,16 @@ async function renderCamStream() {
     rafReq = requestAnimationFrame(renderCamStream);
     return;
   }
+  
   console.log('- Computing... ');
+  const inputBuffer = utils.getInputGPUTensor(camElement, inputOptions);
   const start = performance.now();
-  await netInstance.computeFromPixels(camElement, outputBuffer);
+  await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
   computeTime = (performance.now() - start).toFixed(2);
   console.log(`  done in ${computeTime} ms.`);
+  if (inputBuffer instanceof tf.Tensor) {
+    inputBuffer.dispose();
+  }
   drawInput(camElement, 'camInCanvas');
   showPerfResult();
   await drawOutput(outputBuffer, labels);
