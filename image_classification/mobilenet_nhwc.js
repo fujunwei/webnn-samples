@@ -63,8 +63,8 @@ export class MobileNetV2Nhwc {
   }
 
   async load(devicePreference) {
-    const adaptor = await navigator.gpu.requestAdapter();
-    this.device_ = await adaptor.requestDevice();
+    await tf.setBackend('webgpu');
+    this.device_ = tf.engine().backendInstance.device;
     const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const strides = [2, 2];
@@ -124,6 +124,15 @@ export class MobileNetV2Nhwc {
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
     this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
+    if (this.inputOptions.std) {
+      this.inputOptions.stdTensor = tf.tensor1d(this.inputOptions.std);
+    }
+    if (this.inputOptions.mean) {
+      this.inputOptions.meanTensor = tf.tensor1d(this.inputOptions.mean);
+    }
+    if (this.inputOptions.norm) {
+      this.inputOptions.normTensor = tf.tensor1d([255, 255, 255]);
+    }
   }
 
   // Release the constant tensors of a model
@@ -132,6 +141,23 @@ export class MobileNetV2Nhwc {
     if (this.graph_ !== null && 'dispose' in this.graph_) {
       this.graph_.dispose();
     }
+    if (this.inputOptions.meanTensor instanceof tf.Tensor) {
+      this.inputOptions.meanTensor.dispose();
+    }
+    if (this.inputOptions.stdTensor instanceof tf.Tensor) {
+      this.inputOptions.stdTensor.dispose();
+    }
+    if (this.inputOptions.normTensor instanceof tf.Tensor) {
+      this.inputOptions.normTensor.dispose();
+    }
+  }
+
+  async computeGPUTensor(inputTensor, outputBuffer) {
+    const inputGPUBuffer = tf.engine().backendInstance.getBuffer(inputTensor.dataId);
+    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
+    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
+    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
+    this.outputGPUBuffer_.unmap();
   }
 
   async compute(inputBuffer, outputBuffer) {

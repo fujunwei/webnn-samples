@@ -74,6 +74,7 @@ export class MobileNetV2Nchw {
   }
 
   async load(devicePreference) {
+    await tf.setBackend('webgpu');
     this.device_ = tf.engine().backendInstance.device;
     const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
@@ -128,9 +129,15 @@ export class MobileNetV2Nchw {
     this.graph_ = this.builder_.build({'output': outputOperand});
     this.outputGPUBuffer_ = this.device_.createBuffer(
       {size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
-    this.stdTensor_ = tf.tensor1d(this.inputOptions.std);
-    this.meanTensor_ = tf.tensor1d(this.inputOptions.mean);
-    this.normTensor_ = tf.tensor1d([255, 255, 255]);
+    if (this.inputOptions.std) {
+      this.inputOptions.stdTensor = tf.tensor1d(this.inputOptions.std);
+    }
+    if (this.inputOptions.mean) {
+      this.inputOptions.meanTensor = tf.tensor1d(this.inputOptions.mean);
+    }
+    if (this.inputOptions.norm) {
+      this.inputOptions.normTensor = tf.tensor1d([255, 255, 255]);
+    }
   }
 
   // Release the constant tensors of a model
@@ -139,20 +146,23 @@ export class MobileNetV2Nchw {
     if (this.graph_ !== null && 'dispose' in this.graph_) {
       this.graph_.dispose();
     }
+    if (this.inputOptions.meanTensor instanceof tf.Tensor) {
+      this.inputOptions.meanTensor.dispose();
+    }
+    if (this.inputOptions.stdTensor instanceof tf.Tensor) {
+      this.inputOptions.stdTensor.dispose();
+    }
+    if (this.inputOptions.normTensor instanceof tf.Tensor) {
+      this.inputOptions.normTensor.dispose();
+    }
   }
 
-  async computeFromPixels(inputElement, outputBuffer) {
-    const inputTensor = tf.tidy(() => {
-      return tf.browser.fromPixels(inputElement).resizeBilinear([this.inputHeight_, this.inputWidth_])
-        .div(this.normTensor_).sub(this.meanTensor_).div(this.stdTensor_).transpose([2, 0, 1]);
-    });
-    tf.engine().backendInstance.submitQueue();
-    const inputGPUBuffer = tf.engine().backendInstance.tensorMap.get(inputTensor.dataId).bufferInfo.buffer;
+  async computeGPUTensor(inputTensor, outputBuffer) {
+    const inputGPUBuffer = tf.engine().backendInstance.getBuffer(inputTensor.dataId);
     this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
     await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
     outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
     this.outputGPUBuffer_.unmap();
-    inputTensor.dispose();
   }
 
   async compute(inputBuffer, outputBuffer) {

@@ -283,17 +283,17 @@ async function main() {
     // UI shows inferencing progress
     await ui.showProgressComponent('done', 'done', 'current');
     if (inputType === 'image') {
-      const inputBuffer = utils.getInputTensor(imgElement, inputOptions);
+      const inputBuffer = utils.getInputGPUTensor(imgElement, inputOptions);
       console.log('- Computing... ');
       const computeTimeArray = [];
       let medianComputeTime;
       if (numRuns > 1) {
         // Do warm up
-        await netInstance.compute(inputBuffer, outputBuffer);
+        await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
       }
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        await netInstance.compute(inputBuffer, outputBuffer);
+        await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));
@@ -309,6 +309,9 @@ async function main() {
       drawInput(imgElement, 'inputCanvas');
       await drawOutput(outputBuffer, labels);
       showPerfResult(medianComputeTime);
+      if (inputBuffer instanceof tf.Tensor) {
+        inputBuffer.dispose();
+      }
     } else if (inputType === 'camera') {
       await getMediaStream();
       camElement.srcObject = stream;

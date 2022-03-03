@@ -174,6 +174,34 @@ export function getInputTensor(inputElement, inputOptions) {
   return tensor;
 }
 
+export function getInputGPUTensor(inputElement, inputOptions) {
+  const inputDimensions = inputOptions.inputDimensions;
+  let [channels, height, width] = inputDimensions.slice(1);
+  const inputLayout = inputOptions.inputLayout;
+  if (inputLayout === 'nhwc') {
+    [height, width, channels] = inputDimensions.slice(1);
+  }
+  const inputTensor = tf.tidy(() => {
+    let tensor = tf.browser.fromPixels(inputElement).resizeBilinear([height, width]);
+    if (inputOptions.normTensor instanceof tf.Tensor) {
+      tensor = tensor.div(inputOptions.normTensor)
+    }
+    if (inputOptions.meanTensor instanceof tf.Tensor) {
+      tensor = tensor.sub(inputOptions.meanTensor);
+    }
+    if (inputOptions.stdTensor instanceof tf.Tensor) {
+      tensor = tensor.div(inputOptions.stdTensor);
+    }
+    if (inputLayout === 'nchw') {
+      // nhwc -> nchw
+      tensor = tensor.transpose([2, 0, 1]);
+    }
+    return tensor;
+  });
+  tf.engine().backendInstance.submitQueue();
+  return inputTensor;
+}
+
 // Get median value from an array of Number
 export function getMedianValue(array) {
   array = array.sort((a, b) => a - b);
