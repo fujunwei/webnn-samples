@@ -230,13 +230,16 @@ async function renderCamStream() {
     rafReq = requestAnimationFrame(renderCamStream);
     return;
   }
-  const inputBuffer = utils.getInputTensor(camElement, inputOptions);
+  const inputBuffer = utils.getInputGPUTensor(camElement, inputOptions);
   const inputCanvas = utils.getVideoFrame(camElement);
   console.log('- Computing... ');
   const start = performance.now();
-  await netInstance.compute(inputBuffer, outputBuffer);
+  await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
   computeTime = (performance.now() - start).toFixed(2);
   console.log(`  done in ${computeTime} ms.`);
+  if (inputBuffer instanceof tf.Tensor) {
+    inputBuffer.dispose();
+  }
   showPerfResult();
   await drawOutput(inputCanvas);
   $('#fps').text(`${(1000/computeTime).toFixed(0)} FPS`);
@@ -244,18 +247,6 @@ async function renderCamStream() {
 }
 
 async function drawOutput(srcElement) {
-  // TODO: move 'argMax' operation to graph once it is supported in WebNN spec.
-  // https://github.com/webmachinelearning/webnn/issues/184
-  const [argMaxBuffer, outputShape] = tf.tidy(() => {
-    const a = tf.tensor(outputBuffer, netInstance.outputDimensions, 'float32');
-    let axis = 3;
-    if (layout === 'nchw') {
-      axis = 1;
-    }
-    const b = tf.argMax(a, axis);
-    return [b.dataSync(), b.shape];
-  });
-
   const width = inputOptions.inputDimensions[2];
   const imWidth = srcElement.naturalWidth | srcElement.width;
   const imHeight = srcElement.naturalHeight | srcElement.height;
@@ -264,8 +255,8 @@ async function drawOutput(srcElement) {
   const scaledHeight = Math.floor(imHeight / resizeRatio);
 
   const segMap = {
-    data: argMaxBuffer,
-    outputShape: outputShape,
+    data: outputBuffer,
+    outputShape: [1, 513, 513],
     labels: labels,
   };
 
@@ -297,6 +288,8 @@ function constructNetObject(type) {
 
 export async function main() {
   try {
+    await tf.setBackend('webgpu');
+    tf.env().set('WEBGPU_USE_IMPORT', true);
     ui.handleClick(disabledSelectors, true);
     let start;
     // Set 'numRuns' param to run inference multiple times
@@ -327,7 +320,7 @@ export async function main() {
       inputOptions = netInstance.inputOptions;
       labels = await fetchLabels(inputOptions.labelUrl);
       outputBuffer =
-          new Float32Array(utils.sizeOfShape(netInstance.outputDimensions));
+          new Uint32Array(utils.sizeOfShape(netInstance.outputDimensions));
       isFirstTimeLoad = false;
       console.log(`- Model name: ${modelName}, Model layout: ${layout} -`);
       // UI shows model loading progress
@@ -354,11 +347,11 @@ export async function main() {
       let medianComputeTime;
       if (numRuns > 1) {
         // Do warm up
-        await netInstance.compute(inputBuffer, outputBuffer);
+        await netInstance.compute(inputBuffer, outputBuffer, Uint32Array);
       }
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        await netInstance.compute(inputBuffer, outputBuffer);
+        await netInstance.compute(inputBuffer, outputBuffer, Uint32Array);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));
@@ -374,6 +367,9 @@ export async function main() {
       ui.readyShowResultComponents();
       await drawOutput(imgElement);
       showPerfResult(medianComputeTime);
+      if (inputBuffer instanceof tf.Tensor) {
+        inputBuffer.dispose();
+      }
     } else if (inputType === 'camera') {
       await getMediaStream();
       camElement.srcObject = stream;

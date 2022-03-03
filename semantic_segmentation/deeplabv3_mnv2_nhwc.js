@@ -1,13 +1,12 @@
 'use strict';
 
-import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
+import { BaseNetwork } from '../common/base_net.js';
+import {buildConstantByNpy} from '../common/utils.js';
 
 // DeepLab V3 MobileNet V2 model with 'nhwc' input layout
-export class DeepLabV3MNV2Nhwc {
+export class DeepLabV3MNV2Nhwc extends BaseNetwork {
   constructor() {
-    this.device_ = null;
-    this.builder_ = null;
-    this.graph_ = null;
+    super();
     this.weightsUrl_ = '../test-data/models/deeplabv3_mnv2_nhwc/weights/';
     this.inputOptions = {
       mean: [127.5, 127.5, 127.5],
@@ -17,11 +16,7 @@ export class DeepLabV3MNV2Nhwc {
       labelUrl: './labels/labels.txt',
       inputDimensions: [1, 513, 513, 3],
     };
-    this.outputDimensions = [1, 513, 513, 21];
-    this.inputSizeInBytes_ = sizeOfShape(this.inputOptions.inputDimensions) * Float32Array.BYTES_PER_ELEMENT;
-    this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
-    this.inputGPUBuffers_ = [];
-    this.outputGPUBuffer_ = null;
+    this.outputDimensions = [1, 513, 513, 1];
   }
 
   async buildConv_(
@@ -76,8 +71,7 @@ export class DeepLabV3MNV2Nhwc {
   }
 
   async load(devicePreference) {
-    const adaptor = await navigator.gpu.requestAdapter();
-    this.device_ = await adaptor.requestDevice();
+    await this.init();
     const context = navigator.ml.createContext(this.device_);
     this.builder_ = new MLGraphBuilder(context);
     const strides = [2, 2];
@@ -135,43 +129,8 @@ export class DeepLabV3MNV2Nhwc {
     const conv6 = await this.buildConv_(conv5, 'logits_semantic', '', false);
     const resample1 = this.builder_.resample2d(
         conv6, {sizes: [65, 65], mode: 'linear', axes: [1, 2]});
-    return this.builder_.resample2d(
+    const resample2 = this.builder_.resample2d(
         resample1, {sizes: [513, 513], mode: 'linear', axes: [1, 2]});
-  }
-
-  build(outputOperand) {
-    this.graph_ = this.builder_.build({'output': outputOperand});
-    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
-  }
-
-  // Release the constant tensors of a model
-  dispose() {
-    // dispose() is only available in webnn-polyfill
-    if (this.graph_ !== null && 'dispose' in this.graph_) {
-      this.graph_.dispose();
-    }
-  }
-
-  async compute(inputBuffer, outputBuffer) {
-    let inputGPUBuffer;
-    if (this.inputGPUBuffers_.length) {
-      inputGPUBuffer = this.inputGPUBuffers_.pop();
-    } else {
-      console.log('create buffer');
-      inputGPUBuffer = this.device_.createBuffer({
-        size: this.inputSizeInBytes_,
-        usage: GPUBufferUsage.MAP_WRITE | GPUBufferUsage.COPY_SRC
-      });
-      await inputGPUBuffer.mapAsync(GPUMapMode.WRITE);
-    }
-    new Float32Array(inputGPUBuffer.getMappedRange()).set(inputBuffer);
-    inputGPUBuffer.unmap();
-    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBuffer_}});
-    inputGPUBuffer.mapAsync(GPUMapMode.WRITE).then(() => {
-      this.inputGPUBuffers_.push(inputGPUBuffer);
-    });
-    await this.outputGPUBuffer_.mapAsync(GPUMapMode.READ);
-    outputBuffer.set(new Float32Array(this.outputGPUBuffer_.getMappedRange()));
-    this.outputGPUBuffer_.unmap();
+    return this.builder_.reduceArgMax(resample2, {axes: [3], keepDimensions: false});
   }
 }
