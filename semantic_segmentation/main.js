@@ -6,6 +6,8 @@ import * as ui from '../common/ui.js';
 import * as utils from '../common/utils.js';
 import {Renderer} from './lib/renderer.js';
 
+import { drawOutput } from './blur.js';
+
 const imgElement = document.getElementById('feedElement');
 imgElement.src = './images/test.jpg';
 const camElement = document.getElementById('feedMediaElement');
@@ -35,8 +37,8 @@ $(document).ready(() => {
 });
 
 $(window).on('load', () => {
-  renderer = new Renderer(outputCanvas);
-  renderer.setup();
+  // renderer = new Renderer(outputCanvas);
+  // renderer.setup();
   loadRenderUI();
 });
 
@@ -246,24 +248,24 @@ async function renderCamStream() {
   rafReq = requestAnimationFrame(renderCamStream);
 }
 
-async function drawOutput(srcElement) {
-  const width = inputOptions.inputDimensions[2];
-  const imWidth = srcElement.naturalWidth | srcElement.width;
-  const imHeight = srcElement.naturalHeight | srcElement.height;
-  const resizeRatio = Math.max(Math.max(imWidth, imHeight) / width, 1);
-  const scaledWidth = Math.floor(imWidth / resizeRatio);
-  const scaledHeight = Math.floor(imHeight / resizeRatio);
+// async function drawOutput(srcElement) {
+//   const width = inputOptions.inputDimensions[2];
+//   const imWidth = srcElement.naturalWidth | srcElement.width;
+//   const imHeight = srcElement.naturalHeight | srcElement.height;
+//   const resizeRatio = Math.max(Math.max(imWidth, imHeight) / width, 1);
+//   const scaledWidth = Math.floor(imWidth / resizeRatio);
+//   const scaledHeight = Math.floor(imHeight / resizeRatio);
 
-  const segMap = {
-    data: outputBuffer,
-    outputShape: [1, 513, 513],
-    labels: labels,
-  };
+//   const segMap = {
+//     data: outputBuffer,
+//     outputShape: [1, 513, 513],
+//     labels: labels,
+//   };
 
-  renderer.uploadNewTexture(srcElement, [scaledWidth, scaledHeight]);
-  renderer.drawOutputs(segMap);
-  renderer.highlightHoverLabel(hoverPos, outputCanvas);
-}
+//   renderer.uploadNewTexture(srcElement, [scaledWidth, scaledHeight]);
+//   renderer.drawOutputs(segMap);
+//   renderer.highlightHoverLabel(hoverPos, outputCanvas);
+// }
 
 function showPerfResult(medianComputeTime = undefined) {
   $('#loadTime').html(`${loadTime} ms`);
@@ -341,17 +343,17 @@ export async function main() {
     // UI shows inferencing progress
     await ui.showProgressComponent('done', 'done', 'current');
     if (inputType === 'image') {
-      const inputBuffer = utils.getInputTensor(imgElement, inputOptions);
+      const inputBuffer = utils.getInputGPUTensor(imgElement, inputOptions);
       console.log('- Computing... ');
       const computeTimeArray = [];
       let medianComputeTime;
       if (numRuns > 1) {
         // Do warm up
-        await netInstance.compute(inputBuffer, outputBuffer, Uint32Array);
+        await netInstance.computeGPUTensorToGPUBuffer(inputBuffer);
       }
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        await netInstance.compute(inputBuffer, outputBuffer, Uint32Array);
+        await netInstance.computeGPUTensorToGPUBuffer(inputBuffer);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));
@@ -365,7 +367,7 @@ export async function main() {
       await ui.showProgressComponent('done', 'done', 'done');
       $('#fps').hide();
       ui.readyShowResultComponents();
-      await drawOutput(imgElement);
+      await drawOutput(imgElement, outputCanvas, netInstance.outputGPUBufferForProcessing_, netInstance.device_);
       showPerfResult(medianComputeTime);
       if (inputBuffer instanceof tf.Tensor) {
         inputBuffer.dispose();
