@@ -159,339 +159,390 @@ fn frag_main([[location(0)]] fragUV : vec2<f32>) -> [[location(0)]] vec4<f32> {
 const tileDim = 128;
 const batch = [4, 4];
 
-export async function drawOutput(img, canvas, segmapBuffer, device) {
-  const adapter = await navigator.gpu.requestAdapter();
+export class WebGPUBlur {
+  constructor(outputCanvas, device) {
+    this.canvas = outputCanvas;
+    this.device = device;
+    this.settings = {
+      filterSize: 50,
+      iterations: 2,
+    };
+    this.srcWidth = 0;
+    this.srcHeight = 0;
+    this.segmapWidth = 513;
+    this.segmapHeight = 513;
+    this.segmapBuffer = null;
+  }
 
-  const context = canvas.getContext('webgpu');
+  async init_(srcSize, segmap) {
+    const srcWidth = srcSize.width;
+    const srcHeight = srcSize.height;
+    const segmapWidth = segmap.width;
+    const segmapHeight = segmap.height;
+    const segmapBuffer = segmap.buffer;
+    if (this.srcWidth === srcWidth && this.srcHeight === srcHeight &&
+        this.segmapWidth === segmapWidth && this.segmapHeight === segmapHeight &&
+        this.segmapBuffer === segmapBuffer) {
+      return;
+    }
+    
+    this.srcWidth = srcWidth;
+    this.srcHeight = srcHeight;
+    this.segmapWidth = segmapWidth;
+    this.segmapHeight = segmapHeight;
+    this.segmapBuffer = segmapBuffer;
 
-  const devicePixelRatio = window.devicePixelRatio || 1;
-  const presentationSize = [
-    canvas.clientWidth * devicePixelRatio,
-    canvas.clientHeight * devicePixelRatio,
-  ];
-  const presentationFormat = context.getPreferredFormat(adapter);
+    const adapter = await navigator.gpu.requestAdapter();
 
-  context.configure({
-    device,
-    format: presentationFormat,
-    size: presentationSize,
-  });
+    const canvas = this.canvas;
+    const device = this.device;
 
-  const segPipeline = device.createComputePipeline({
-    compute: {
-      module: device.createShaderModule({
-        code: segWGSL,
-      }),
-      entryPoint: 'main',
-    },
-  });
+    canvas.width = srcWidth;
+    canvas.height = srcHeight;
+    const context = canvas.getContext('webgpu');
+    this.context = context;
 
-  const blurPipeline = device.createComputePipeline({
-    compute: {
-      module: device.createShaderModule({
-        code: blurWGSL,
-      }),
-      entryPoint: 'main',
-    },
-  });
+    const devicePixelRatio = window.devicePixelRatio || 1;
+    const presentationSize = [
+      canvas.width * devicePixelRatio,
+      canvas.height * devicePixelRatio,
+    ];
+    const presentationFormat = context.getPreferredFormat(adapter);
 
-  const fullscreenQuadPipeline = device.createRenderPipeline({
-    vertex: {
-      module: device.createShaderModule({
-        code: fullscreenTexturedQuadWGSL,
-      }),
-      entryPoint: 'vert_main',
-    },
-    fragment: {
-      module: device.createShaderModule({
-        code: fullscreenTexturedQuadWGSL,
-      }),
-      entryPoint: 'frag_main',
-      targets: [
-        {
-          format: presentationFormat,
-        },
-      ],
-    },
-    primitive: {
-      topology: 'triangle-list',
-    },
-  });
+    context.configure({
+      device,
+      format: presentationFormat,
+      size: presentationSize,
+    });
 
-  const sampler = device.createSampler({
-    magFilter: 'linear',
-    minFilter: 'linear',
-  });
-
-  await img.decode();
-  const imageBitmap = await createImageBitmap(img);
-  const [srcWidth, srcHeight] = [imageBitmap.width, imageBitmap.height];
-  // const [srcWidth, srcHeight] = [513, 513];
-  // const inputCanvas = document.createElement('canvas');
-  // inputCanvas.width = srcWidth;
-  // inputCanvas.height = srcHeight;
-  // const canvasContext = inputCanvas.getContext('2d');
-  // canvasContext.drawImage(img, 0, 0, srcWidth, srcHeight);
-
-  canvas.width = srcWidth;
-  canvas.height = srcHeight;
-  const cubeTexture = device.createTexture({
-    size: [srcWidth, srcHeight, 1],
-    format: 'rgba8unorm',
-    usage:
-      GPUTextureUsage.TEXTURE_BINDING |
-      GPUTextureUsage.COPY_DST |
-      GPUTextureUsage.RENDER_ATTACHMENT,
-  });
-  device.queue.copyExternalImageToTexture(
-    { source: imageBitmap },
-    { texture: cubeTexture },
-    [ srcWidth, srcHeight]
-  );
-
-  const textures = [0, 1, 2].map(() => {
-    return device.createTexture({
-      size: {
-        width: srcWidth,
-        height: srcHeight,
+    const segPipeline = device.createComputePipeline({
+      compute: {
+        module: device.createShaderModule({
+          code: segWGSL,
+        }),
+        entryPoint: 'main',
       },
+    });
+    this.segPipeline = segPipeline;
+
+    const blurPipeline = device.createComputePipeline({
+      compute: {
+        module: device.createShaderModule({
+          code: blurWGSL,
+        }),
+        entryPoint: 'main',
+      },
+    });
+    this.blurPipeline = blurPipeline;
+
+    const fullscreenQuadPipeline = device.createRenderPipeline({
+      vertex: {
+        module: device.createShaderModule({
+          code: fullscreenTexturedQuadWGSL,
+        }),
+        entryPoint: 'vert_main',
+      },
+      fragment: {
+        module: device.createShaderModule({
+          code: fullscreenTexturedQuadWGSL,
+        }),
+        entryPoint: 'frag_main',
+        targets: [
+          {
+            format: presentationFormat,
+          },
+        ],
+      },
+      primitive: {
+        topology: 'triangle-list',
+      },
+    });
+    this.fullscreenQuadPipeline = fullscreenQuadPipeline;
+
+    const sampler = device.createSampler({
+      magFilter: 'linear',
+      minFilter: 'linear',
+    });
+    this.sampler = sampler;
+
+    const cubeTexture = device.createTexture({
+      size: [srcWidth, srcHeight, 1],
       format: 'rgba8unorm',
       usage:
+        GPUTextureUsage.TEXTURE_BINDING |
         GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.STORAGE_BINDING |
-        GPUTextureUsage.TEXTURE_BINDING,
+        GPUTextureUsage.RENDER_ATTACHMENT,
     });
-  });
+    this.cubeTexture = cubeTexture;
 
-  const buffer0 = (() => {
-    const buffer = device.createBuffer({
-      size: 4,
-      mappedAtCreation: true,
-      usage: GPUBufferUsage.UNIFORM,
+    const textures = [0, 1, 2].map(() => {
+      return device.createTexture({
+        size: {
+          width: srcWidth,
+          height: srcHeight,
+        },
+        format: 'rgba8unorm',
+        usage:
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.STORAGE_BINDING |
+          GPUTextureUsage.TEXTURE_BINDING,
+      });
     });
-    new Uint32Array(buffer.getMappedRange())[0] = 0;
-    buffer.unmap();
-    return buffer;
-  })();
 
-  const buffer1 = (() => {
-    const buffer = device.createBuffer({
-      size: 4,
-      mappedAtCreation: true,
-      usage: GPUBufferUsage.UNIFORM,
+    const buffer0 = (() => {
+      const buffer = device.createBuffer({
+        size: 4,
+        mappedAtCreation: true,
+        usage: GPUBufferUsage.UNIFORM,
+      });
+      new Uint32Array(buffer.getMappedRange())[0] = 0;
+      buffer.unmap();
+      return buffer;
+    })();
+
+    const buffer1 = (() => {
+      const buffer = device.createBuffer({
+        size: 4,
+        mappedAtCreation: true,
+        usage: GPUBufferUsage.UNIFORM,
+      });
+      new Uint32Array(buffer.getMappedRange())[0] = 1;
+      buffer.unmap();
+      return buffer;
+    })();
+
+    const segmapSizeBuffer = (() => {
+      const buffer = device.createBuffer({
+        size: 2 * Uint32Array.BYTES_PER_ELEMENT,
+        mappedAtCreation: true,
+        usage: GPUBufferUsage.UNIFORM,
+      });
+      new Uint32Array(buffer.getMappedRange()).set([segmapWidth, segmapHeight]);
+      buffer.unmap();
+      return buffer;
+    })();
+
+    const blurParamsBuffer = device.createBuffer({
+      size: 8,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
     });
-    new Uint32Array(buffer.getMappedRange())[0] = 1;
-    buffer.unmap();
-    return buffer;
-  })();
 
-  const segmapSizeBuffer = (() => {
-    const buffer = device.createBuffer({
-      size: 2 * Uint32Array.BYTES_PER_ELEMENT,
-      mappedAtCreation: true,
-      usage: GPUBufferUsage.UNIFORM,
+    const computeSegBindGroup = device.createBindGroup({
+      layout: segPipeline.getBindGroupLayout(0),
+      entries: [
+        {
+          binding: 0,
+          resource: sampler,
+        },
+        {
+          binding: 1,
+          resource: {
+            buffer: segmapSizeBuffer,
+          },
+        },
+        {
+          binding: 2,
+          resource: {
+            buffer: segmapBuffer,
+          },
+        },
+        {
+          binding: 3,
+          resource: cubeTexture.createView(),
+        },
+        {
+          binding: 4,
+          resource: textures[0].createView(),
+        },
+        {
+          binding: 5,
+          resource: textures[2].createView(),
+        },
+      ],
     });
-    new Uint32Array(buffer.getMappedRange()).set([513, 513]);
-    buffer.unmap();
-    return buffer;
-  })();
+    this.computeSegBindGroup = computeSegBindGroup;
 
-  const blurParamsBuffer = device.createBuffer({
-    size: 8,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
-  });
-
-  const computeSegBindGroup = device.createBindGroup({
-    layout: segPipeline.getBindGroupLayout(0),
-    entries: [
-      {
-        binding: 0,
-        resource: sampler,
-      },
-      {
-        binding: 1,
-        resource: {
-          buffer: segmapSizeBuffer,
+    const computeConstants = device.createBindGroup({
+      layout: blurPipeline.getBindGroupLayout(0),
+      entries: [
+        {
+          binding: 0,
+          resource: sampler,
         },
-      },
-      {
-        binding: 2,
-        resource: {
-          buffer: segmapBuffer,
+        {
+          binding: 1,
+          resource: {
+            buffer: blurParamsBuffer,
+          },
         },
-      },
-      {
-        binding: 3,
-        resource: cubeTexture.createView(),
-      },
-      {
-        binding: 4,
-        resource: textures[0].createView(),
-      },
-      {
-        binding: 5,
-        resource: textures[2].createView(),
-      },
-    ],
-  });
+      ],
+    });
+    this.computeConstants = computeConstants;
 
-  const computeConstants = device.createBindGroup({
-    layout: blurPipeline.getBindGroupLayout(0),
-    entries: [
-      {
-        binding: 0,
-        resource: sampler,
-      },
-      {
-        binding: 1,
-        resource: {
-          buffer: blurParamsBuffer,
+    const computeBindGroup0 = device.createBindGroup({
+      layout: blurPipeline.getBindGroupLayout(1),
+      entries: [
+        {
+          binding: 1,
+          resource: cubeTexture.createView(),
         },
-      },
-    ],
-  });
-
-  const computeBindGroup0 = device.createBindGroup({
-    layout: blurPipeline.getBindGroupLayout(1),
-    entries: [
-      {
-        binding: 1,
-        resource: cubeTexture.createView(),
-      },
-      {
-        binding: 2,
-        resource: textures[0].createView(),
-      },
-      {
-        binding: 3,
-        resource: {
-          buffer: buffer0,
+        {
+          binding: 2,
+          resource: textures[0].createView(),
         },
-      },
-    ],
-  });
-
-  const computeBindGroup1 = device.createBindGroup({
-    layout: blurPipeline.getBindGroupLayout(1),
-    entries: [
-      {
-        binding: 1,
-        resource: textures[0].createView(),
-      },
-      {
-        binding: 2,
-        resource: textures[1].createView(),
-      },
-      {
-        binding: 3,
-        resource: {
-          buffer: buffer1,
+        {
+          binding: 3,
+          resource: {
+            buffer: buffer0,
+          },
         },
-      },
-    ],
-  });
+      ],
+    });
+    this.computeBindGroup0 = computeBindGroup0;
 
-  const computeBindGroup2 = device.createBindGroup({
-    layout: blurPipeline.getBindGroupLayout(1),
-    entries: [
-      {
-        binding: 1,
-        resource: textures[1].createView(),
-      },
-      {
-        binding: 2,
-        resource: textures[0].createView(),
-      },
-      {
-        binding: 3,
-        resource: {
-          buffer: buffer0,
+    const computeBindGroup1 = device.createBindGroup({
+      layout: blurPipeline.getBindGroupLayout(1),
+      entries: [
+        {
+          binding: 1,
+          resource: textures[0].createView(),
         },
-      },
-    ],
-  });
+        {
+          binding: 2,
+          resource: textures[1].createView(),
+        },
+        {
+          binding: 3,
+          resource: {
+            buffer: buffer1,
+          },
+        },
+      ],
+    });
+    this.computeBindGroup1 = computeBindGroup1;
 
-  const showResultBindGroup = device.createBindGroup({
-    layout: fullscreenQuadPipeline.getBindGroupLayout(0),
-    entries: [
-      {
-        binding: 0,
-        resource: sampler,
-      },
-      {
-        binding: 1,
-        resource: textures[2].createView(),
-      },
-    ],
-  });
+    const computeBindGroup2 = device.createBindGroup({
+      layout: blurPipeline.getBindGroupLayout(1),
+      entries: [
+        {
+          binding: 1,
+          resource: textures[1].createView(),
+        },
+        {
+          binding: 2,
+          resource: textures[0].createView(),
+        },
+        {
+          binding: 3,
+          resource: {
+            buffer: buffer0,
+          },
+        },
+      ],
+    });
+    this.computeBindGroup2 = computeBindGroup2;
 
-  const settings = {
-    filterSize: 50,
-    iterations: 2,
-  };
+    const showResultBindGroup = device.createBindGroup({
+      layout: fullscreenQuadPipeline.getBindGroupLayout(0),
+      entries: [
+        {
+          binding: 0,
+          resource: sampler,
+        },
+        {
+          binding: 1,
+          resource: textures[2].createView(),
+        },
+      ],
+    });
+    this.showResultBindGroup = showResultBindGroup;
 
-  let blockDim = tileDim - (settings.filterSize - 1);
-  device.queue.writeBuffer(
-    blurParamsBuffer,
-    0,
-    new Uint32Array([settings.filterSize, blockDim])
-  );
-  if (!canvas) return;
+    const settings = this.settings;
 
-  const commandEncoder = device.createCommandEncoder();
-
-  const computePass = commandEncoder.beginComputePass();
-  computePass.setPipeline(blurPipeline);
-  computePass.setBindGroup(0, computeConstants);
-
-  computePass.setBindGroup(1, computeBindGroup0);
-  computePass.dispatch(
-    Math.ceil(srcWidth / blockDim),
-    Math.ceil(srcHeight / batch[1])
-  );
-
-  computePass.setBindGroup(1, computeBindGroup1);
-  computePass.dispatch(
-    Math.ceil(srcHeight / blockDim),
-    Math.ceil(srcWidth / batch[1])
-  );
-
-  for (let i = 0; i < settings.iterations - 1; ++i) {
-    computePass.setBindGroup(1, computeBindGroup2);
-    computePass.dispatch(
-      Math.ceil(srcWidth / blockDim),
-      Math.ceil(srcHeight / batch[1])
-    );
-
-    computePass.setBindGroup(1, computeBindGroup1);
-    computePass.dispatch(
-      Math.ceil(srcHeight / blockDim),
-      Math.ceil(srcWidth / batch[1])
+    const blockDim = tileDim - (settings.filterSize - 1);
+    device.queue.writeBuffer(
+      blurParamsBuffer,
+      0,
+      new Uint32Array([settings.filterSize, blockDim])
     );
   }
 
-  computePass.setPipeline(segPipeline);
-  computePass.setBindGroup(0, computeSegBindGroup);
-  computePass.dispatch(
-    Math.ceil(srcWidth / 8),
-    Math.ceil(srcHeight / 8)
-  );
+  async drawOutput(src, segmap) {
+    const device = this.device;
+    const blockDim = tileDim - (this.settings.filterSize - 1);
 
-  computePass.endPass();
+    if (src instanceof Image) {
+      await src.decode();
+      const imageBitmap = await createImageBitmap(src);
+      await this.init_({width: imageBitmap.width, height: imageBitmap.height}, segmap);
+      device.queue.copyExternalImageToTexture(
+        { source: imageBitmap },
+        { texture: this.cubeTexture },
+        [ this.srcWidth, this.srcHeight]
+      );
+    } else if (src instanceof HTMLCanvasElement) {
+      await this.init_({width: src.width, height: src.height}, segmap);
+      device.queue.copyExternalImageToTexture(
+        { source: src },
+        { texture: this.cubeTexture },
+        [ this.srcWidth, this.srcHeight]
+      );
+    }
+    const commandEncoder = device.createCommandEncoder();
 
-  const passEncoder = commandEncoder.beginRenderPass({
-    colorAttachments: [
-      {
-        view: context.getCurrentTexture().createView(),
-        loadValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
-        storeOp: 'store',
-      },
-    ],
-  });
+    const computePass = commandEncoder.beginComputePass();
+    computePass.setPipeline(this.blurPipeline);
+    computePass.setBindGroup(0, this.computeConstants);
 
-  passEncoder.setPipeline(fullscreenQuadPipeline);
-  passEncoder.setBindGroup(0, showResultBindGroup);
-  passEncoder.draw(6, 1, 0, 0);
-  passEncoder.endPass();
-  device.queue.submit([commandEncoder.finish()]);
+    computePass.setBindGroup(1, this.computeBindGroup0);
+    computePass.dispatch(
+      Math.ceil(this.srcWidth / blockDim),
+      Math.ceil(this.srcHeight / batch[1])
+    );
+
+    computePass.setBindGroup(1, this.computeBindGroup1);
+    computePass.dispatch(
+      Math.ceil(this.srcHeight / blockDim),
+      Math.ceil(this.srcWidth / batch[1])
+    );
+
+    for (let i = 0; i < this.settings.iterations - 1; ++i) {
+      computePass.setBindGroup(1, this.computeBindGroup2);
+      computePass.dispatch(
+        Math.ceil(this.srcWidth / blockDim),
+        Math.ceil(this.srcHeight / batch[1])
+      );
+
+      computePass.setBindGroup(1, this.computeBindGroup1);
+      computePass.dispatch(
+        Math.ceil(this.srcHeight / blockDim),
+        Math.ceil(this.srcWidth / batch[1])
+      );
+    }
+
+    computePass.setPipeline(this.segPipeline);
+    computePass.setBindGroup(0, this.computeSegBindGroup);
+    computePass.dispatch(
+      Math.ceil(this.srcWidth / 8),
+      Math.ceil(this.srcHeight / 8)
+    );
+
+    computePass.endPass();
+
+    const passEncoder = commandEncoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: this.context.getCurrentTexture().createView(),
+          loadValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+          storeOp: 'store',
+        },
+      ],
+    });
+
+    passEncoder.setPipeline(this.fullscreenQuadPipeline);
+    passEncoder.setBindGroup(0, this.showResultBindGroup);
+    passEncoder.draw(6, 1, 0, 0);
+    passEncoder.endPass();
+    device.queue.submit([commandEncoder.finish()]);
+  }
 }

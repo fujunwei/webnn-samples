@@ -13,8 +13,7 @@ export class BaseNetwork {
     this.outputSizeInBytes_ = sizeOfShape(this.outputDimensions) * Float32Array.BYTES_PER_ELEMENT;
     this.inputGPUBuffers_ = [];
     this.outputGPUBuffer_ = null;
-    this.inputHeight_ = this.inputOptions.inputDimensions[2];
-    this.inputWidth_ = this.inputOptions.inputDimensions[3];
+    this.outputGPUBufferForProcessing_ = null;
   }
 
   build(outputOperand) {

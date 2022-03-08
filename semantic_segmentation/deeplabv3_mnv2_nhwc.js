@@ -17,6 +17,8 @@ export class DeepLabV3MNV2Nhwc extends BaseNetwork {
       inputDimensions: [1, 513, 513, 3],
     };
     this.outputDimensions = [1, 513, 513, 1];
+    this.outputWidth = 513;
+    this.outputHeight = 513;
   }
 
   async buildConv_(

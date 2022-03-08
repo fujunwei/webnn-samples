@@ -4,9 +4,9 @@ import {DeepLabV3MNV2Nchw} from './deeplabv3_mnv2_nchw.js';
 import {DeepLabV3MNV2Nhwc} from './deeplabv3_mnv2_nhwc.js';
 import * as ui from '../common/ui.js';
 import * as utils from '../common/utils.js';
-import {Renderer} from './lib/renderer.js';
+// import {Renderer} from './lib/renderer.js';
 
-import { drawOutput } from './blur.js';
+import { WebGPUBlur } from './blur.js';
 
 const imgElement = document.getElementById('feedElement');
 imgElement.src = './images/test.jpg';
@@ -222,6 +222,7 @@ function stopCamera() {
   });
 }
 
+let lastComputeTime = 0;
 /**
  * This method is used to render live camera tab.
  */
@@ -235,15 +236,17 @@ async function renderCamStream() {
   const inputBuffer = utils.getInputGPUTensor(camElement, inputOptions);
   const inputCanvas = utils.getVideoFrame(camElement);
   console.log('- Computing... ');
-  const start = performance.now();
-  await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
-  computeTime = (performance.now() - start).toFixed(2);
+  await netInstance.computeGPUTensorToGPUBuffer(inputBuffer);
+  const now = performance.now();
+  computeTime = (now - lastComputeTime).toFixed(2);
+  lastComputeTime = now;
   console.log(`  done in ${computeTime} ms.`);
   if (inputBuffer instanceof tf.Tensor) {
     inputBuffer.dispose();
   }
   showPerfResult();
-  await drawOutput(inputCanvas);
+  await renderer.drawOutput(inputCanvas, 
+    {buffer: netInstance.outputGPUBufferForProcessing_, width: netInstance.outputWidth, height: netInstance.outputHeight});
   $('#fps').text(`${(1000/computeTime).toFixed(0)} FPS`);
   rafReq = requestAnimationFrame(renderCamStream);
 }
@@ -292,6 +295,7 @@ export async function main() {
   try {
     await tf.setBackend('webgpu');
     tf.env().set('WEBGPU_USE_IMPORT', true);
+    renderer = new WebGPUBlur(outputCanvas, tf.engine().backendInstance.device);
     ui.handleClick(disabledSelectors, true);
     let start;
     // Set 'numRuns' param to run inference multiple times
@@ -367,7 +371,8 @@ export async function main() {
       await ui.showProgressComponent('done', 'done', 'done');
       $('#fps').hide();
       ui.readyShowResultComponents();
-      await drawOutput(imgElement, outputCanvas, netInstance.outputGPUBufferForProcessing_, netInstance.device_);
+      await renderer.drawOutput(imgElement, 
+        {buffer: netInstance.outputGPUBufferForProcessing_, width: netInstance.outputWidth, height: netInstance.outputHeight});
       showPerfResult(medianComputeTime);
       if (inputBuffer instanceof tf.Tensor) {
         inputBuffer.dispose();
