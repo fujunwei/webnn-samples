@@ -51,7 +51,7 @@ export async function readbackGPUBuffer(device, size, gpuBuffer) {
   return new Float32Array(readbackBuffer.getMappedRange());
 }
 
-export async function buildConstantByNpy(device, builder, url) {
+export async function buildConstantByNpy(device, builder, url, polyfill = false) {
   const dataTypeMap = new Map([
     ['f2', {type: 'float16', array: Uint16Array}],
     ['f4', {type: 'float32', array: Float32Array}],
@@ -81,7 +81,11 @@ export async function buildConstantByNpy(device, builder, url) {
     typedArray[i] = dataView[`get` + type[0].toUpperCase() + type.substr(1)](
         i * TypedArrayConstructor.BYTES_PER_ELEMENT, littleEndian);
   }
-  return builder.constant({type, dimensions}, {resource: await createGPUBuffer(device, sizeOfShape(dimensions), typedArray)});
+  if (!polyfill) {
+    return builder.constant({type, dimensions}, {resource: await createGPUBuffer(device, sizeOfShape(dimensions), typedArray)});
+  } else {
+    return builder.constant({type, dimensions}, {resource: tf.tensor(typedArray, dimensions)});
+  }
 }
 
 // Convert video frame to a canvas element
@@ -197,6 +201,9 @@ export function getInputGPUTensor(inputElement, inputOptions) {
       // nhwc -> nchw
       tensor = tf.transpose(tensor, [2, 0, 1]);
     }
+    const shape = tensor.shape.slice();
+    shape.unshift(1)
+    tensor = tf.reshape(tensor, shape);
     return tensor;
   });
   tf.engine().backendInstance.submitQueue();

@@ -1,5 +1,6 @@
 'use strict';
 
+import {MobileNetV2NchwPolyfill} from './mobilenet_nchw_polyfill.js';
 import {MobileNetV2Nchw} from './mobilenet_nchw.js';
 import {MobileNetV2Nhwc} from './mobilenet_nhwc.js';
 import {SqueezeNetNchw} from './squeezenet_nchw.js';
@@ -220,6 +221,7 @@ function showPerfResult(medianComputeTime = undefined) {
 function constructNetObject(type) {
   const netObject = {
     'mobilenetnchw': new MobileNetV2Nchw(),
+    'mobilenetnchwpolyfill': new MobileNetV2NchwPolyfill(),
     'mobilenetnhwc': new MobileNetV2Nhwc(),
     'squeezenetnchw': new SqueezeNetNchw(),
     'squeezenetnhwc': new SqueezeNetNhwc(),
@@ -243,6 +245,7 @@ async function main() {
     const params = new URLSearchParams(location.search);
     let numRuns = params.get('numRuns');
     numRuns = numRuns === null ? 1 : parseInt(numRuns);
+    const isPolyfill = params.get('polyfill') === 'true';
 
     if (numRuns < 1) {
       ui.addAlert('The value of param numRuns must be greater than or equal' +
@@ -262,7 +265,8 @@ async function main() {
         // Call dispose() to and avoid memory leak
         netInstance.dispose();
       }
-      instanceType = modelName + layout;
+      instanceType = modelName + layout + (isPolyfill ? 'polyfill' : '');
+      console.log(instanceType);
       netInstance = constructNetObject(instanceType);
       inputOptions = netInstance.inputOptions;
       labels = await fetchLabels(inputOptions.labelUrl);
@@ -296,12 +300,19 @@ async function main() {
         // Do warm up
         await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
       }
+      if (inputBuffer instanceof tf.Tensor) {
+        inputBuffer.dispose();
+      }
       for (let i = 0; i < numRuns; i++) {
+        const inputBuffer = utils.getInputGPUTensor(imgElement, inputOptions);
         start = performance.now();
         await netInstance.computeGPUTensor(inputBuffer, outputBuffer);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));
+        if (inputBuffer instanceof tf.Tensor) {
+          inputBuffer.dispose();
+        }
       }
       if (numRuns > 1) {
         medianComputeTime = utils.getMedianValue(computeTimeArray);
@@ -314,9 +325,7 @@ async function main() {
       drawInput(imgElement, 'inputCanvas');
       await drawOutput(outputBuffer, labels);
       showPerfResult(medianComputeTime);
-      if (inputBuffer instanceof tf.Tensor) {
-        inputBuffer.dispose();
-      }
+      
     } else if (inputType === 'camera') {
       await getMediaStream();
       camElement.srcObject = stream;
