@@ -11,11 +11,11 @@ import { WebGPUBlur } from './blur.js';
 const imgElement = document.getElementById('feedElement');
 imgElement.src = './images/test.jpg';
 const camElement = document.getElementById('feedMediaElement');
+const resultElement = document.getElementById('resultMediaElement');
 const outputCanvas = document.getElementById('outputCanvas');
 let modelName ='deeplabv3mnv2';
 let layout = 'nchw';
 let instanceType = modelName + layout;
-let rafReq;
 let isFirstTimeLoad = true;
 let inputType = 'image';
 let netInstance = null;
@@ -31,6 +31,8 @@ let hoverPos = null;
 let devicePreference = 'gpu';
 let lastDevicePreference = '';
 const disabledSelectors = ['#tabs > li', '.btn'];
+// An AbortController used to stop the transform.
+let abortController = null;
 
 $(document).ready(() => {
   $('.icdisplay').hide();
@@ -44,26 +46,25 @@ $(window).on('load', () => {
 
 $('#deviceBtns .btn').on('change', async (e) => {
   devicePreference = $(e.target).attr('id');
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
+  if (inputType === 'camera') stopCamera();
   await main();
 });
 
 $('#modelBtns .btn').on('change', async (e) => {
   modelName = $(e.target).attr('id');
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
+  if (inputType === 'camera') stopCamera();
   await main();
 });
 
 $('#layoutBtns .btn').on('change', async (e) => {
   layout = $(e.target).attr('id');
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
+  if (inputType === 'camera') stopCamera();
   await main();
 });
 
 // Click trigger to do inference with <img> element
 $('#img').click(async () => {
-  if (inputType === 'camera') cancelAnimationFrame(rafReq);
-  if (stream !== null) stopCamera();
+  if (inputType === 'camera' || stream !== null) stopCamera();
   inputType = 'image';
   $('#pickimage').show();
   $('.shoulddisplay').hide();
@@ -215,60 +216,75 @@ async function getMediaStream() {
 }
 
 function stopCamera() {
+  camElement.pause();
+  camElement.srcObject = null;
   stream.getTracks().forEach((track) => {
     if (track.readyState === 'live' && track.kind === 'video') {
       track.stop();
     }
   });
+  abortController.abort();
+  abortController = null;
 }
 
 let lastComputeTime = 0;
-/**
- * This method is used to render live camera tab.
- */
-async function renderCamStream() {
-  // If the video element's readyState is 0, the video's width and height are 0.
-  // So check the readState here to make sure it is greater than 0.
-  if (camElement.readyState === 0) {
-    rafReq = requestAnimationFrame(renderCamStream);
-    return;
-  }
-  const inputBuffer = utils.getInputGPUTensor(camElement, inputOptions);
-  const inputCanvas = utils.getVideoFrame(camElement);
-  console.log('- Computing... ');
-  await netInstance.computeGPUTensorToGPUBuffer(inputBuffer);
-  const now = performance.now();
-  computeTime = (now - lastComputeTime).toFixed(2);
-  lastComputeTime = now;
-  console.log(`  done in ${computeTime} ms.`);
-  if (inputBuffer instanceof tf.Tensor) {
-    inputBuffer.dispose();
-  }
-  showPerfResult();
-  await renderer.drawOutput(inputCanvas, 
-    {buffer: netInstance.outputGPUBufferForProcessing_, width: netInstance.outputWidth, height: netInstance.outputHeight});
-  $('#fps').text(`${(1000/computeTime).toFixed(0)} FPS`);
-  rafReq = requestAnimationFrame(renderCamStream);
+function segmentSemantic() {
+  return async (videoFrame, controller) => {
+    const inputBuffer = utils.getInputGPUTensor(videoFrame, inputOptions);
+    console.log('- Computing... ');
+    const now = performance.now();
+    computeTime = (now - lastComputeTime).toFixed(2);
+    lastComputeTime = now;
+    await netInstance.computeGPUTensorToGPUBuffer(inputBuffer);
+    console.log(`  done in ${computeTime} ms.`);
+    showPerfResult();
+    await renderer.drawOutput(videoFrame, 
+      {buffer: netInstance.outputGPUBufferForProcessing_, width: netInstance.outputWidth, height: netInstance.outputHeight});
+    $('#fps').text(`${(1000/computeTime).toFixed(0)} FPS`);
+
+    const frame_from_canvas = new VideoFrame(outputCanvas, {timestamp: videoFrame.timestamp});
+    controller.enqueue(frame_from_canvas);
+    
+    if (inputBuffer instanceof tf.Tensor) {
+      inputBuffer.dispose();
+    }
+    videoFrame.close();
+  };
 }
 
-// async function drawOutput(srcElement) {
-//   const width = inputOptions.inputDimensions[2];
-//   const imWidth = srcElement.naturalWidth | srcElement.width;
-//   const imHeight = srcElement.naturalHeight | srcElement.height;
-//   const resizeRatio = Math.max(Math.max(imWidth, imHeight) / width, 1);
-//   const scaledWidth = Math.floor(imWidth / resizeRatio);
-//   const scaledHeight = Math.floor(imHeight / resizeRatio);
+async function renderCamStream() {
+  await getMediaStream();
+  camElement.srcObject = stream.clone();
+  await camElement.play();
+  const videoTrack = stream.getVideoTracks()[0];
 
-//   const segMap = {
-//     data: outputBuffer,
-//     outputShape: [1, 513, 513],
-//     labels: labels,
-//   };
+  const processor = new MediaStreamTrackProcessor({track: videoTrack, maxBufferSize: 256});
+  const generator = new MediaStreamTrackGenerator({kind: 'video'});
 
-//   renderer.uploadNewTexture(srcElement, [scaledWidth, scaledHeight]);
-//   renderer.drawOutputs(segMap);
-//   renderer.highlightHoverLabel(hoverPos, outputCanvas);
-// }
+  const source = processor.readable;
+  const sink = generator.writable;
+
+  const transformer = new TransformStream({transform: segmentSemantic()});
+  abortController = new AbortController();
+  const signal = abortController.signal;
+
+  const popeThroughPromise = source.pipeThrough(transformer, {signal}).pipeTo(sink);
+
+  popeThroughPromise.catch((e) => {
+    if (signal.aborted) {
+      console.log('Shutting down streams after abort.');
+    } else {
+      console.error('Error from stream transform:', e);
+    }
+    source.cancel(e);
+    sink.abort(e);
+  });
+
+  const processedStream = new MediaStream();
+  processedStream.addTrack(generator);
+  resultElement.srcObject = processedStream;
+  await resultElement.play();
+}
 
 function showPerfResult(medianComputeTime = undefined) {
   $('#loadTime').html(`${loadTime} ms`);
@@ -347,6 +363,9 @@ export async function main() {
     // UI shows inferencing progress
     await ui.showProgressComponent('done', 'done', 'current');
     if (inputType === 'image') {
+      $('#outputCanvas').show();
+      $('#feedMediaElement').hide();
+      $('#resultMediaElement').hide();
       const inputBuffer = utils.getInputGPUTensor(imgElement, inputOptions);
       console.log('- Computing... ');
       const computeTimeArray = [];
@@ -378,9 +397,10 @@ export async function main() {
         inputBuffer.dispose();
       }
     } else if (inputType === 'camera') {
-      await getMediaStream();
-      camElement.srcObject = stream;
-      camElement.onloadeddata = await renderCamStream();
+      $('#outputCanvas').hide();
+      $('#feedMediaElement').show();
+      $('#resultMediaElement').show();
+      await renderCamStream();
       await ui.showProgressComponent('done', 'done', 'done');
       $('#fps').show();
       ui.readyShowResultComponents();

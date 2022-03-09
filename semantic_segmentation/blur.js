@@ -174,7 +174,7 @@ export class WebGPUBlur {
     this.segmapBuffer = null;
   }
 
-  async init_(srcSize, segmap) {
+  async init_(srcSize, segmap, isImport = false) {
     const srcWidth = srcSize.width;
     const srcHeight = srcSize.height;
     const segmapWidth = segmap.width;
@@ -288,6 +288,7 @@ export class WebGPUBlur {
           GPUTextureUsage.TEXTURE_BINDING,
       });
     });
+    this.textures = textures;
 
     const buffer0 = (() => {
       const buffer = device.createBuffer({
@@ -299,6 +300,7 @@ export class WebGPUBlur {
       buffer.unmap();
       return buffer;
     })();
+    this.buffer0 = buffer0;
 
     const buffer1 = (() => {
       const buffer = device.createBuffer({
@@ -310,6 +312,7 @@ export class WebGPUBlur {
       buffer.unmap();
       return buffer;
     })();
+    this.buffer1 = buffer1;
 
     const segmapSizeBuffer = (() => {
       const buffer = device.createBuffer({
@@ -321,46 +324,12 @@ export class WebGPUBlur {
       buffer.unmap();
       return buffer;
     })();
+    this.segmapSizeBuffer = segmapSizeBuffer;
 
     const blurParamsBuffer = device.createBuffer({
       size: 8,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM,
     });
-
-    const computeSegBindGroup = device.createBindGroup({
-      layout: segPipeline.getBindGroupLayout(0),
-      entries: [
-        {
-          binding: 0,
-          resource: sampler,
-        },
-        {
-          binding: 1,
-          resource: {
-            buffer: segmapSizeBuffer,
-          },
-        },
-        {
-          binding: 2,
-          resource: {
-            buffer: segmapBuffer,
-          },
-        },
-        {
-          binding: 3,
-          resource: cubeTexture.createView(),
-        },
-        {
-          binding: 4,
-          resource: textures[0].createView(),
-        },
-        {
-          binding: 5,
-          resource: textures[2].createView(),
-        },
-      ],
-    });
-    this.computeSegBindGroup = computeSegBindGroup;
 
     const computeConstants = device.createBindGroup({
       layout: blurPipeline.getBindGroupLayout(0),
@@ -378,27 +347,6 @@ export class WebGPUBlur {
       ],
     });
     this.computeConstants = computeConstants;
-
-    const computeBindGroup0 = device.createBindGroup({
-      layout: blurPipeline.getBindGroupLayout(1),
-      entries: [
-        {
-          binding: 1,
-          resource: cubeTexture.createView(),
-        },
-        {
-          binding: 2,
-          resource: textures[0].createView(),
-        },
-        {
-          binding: 3,
-          resource: {
-            buffer: buffer0,
-          },
-        },
-      ],
-    });
-    this.computeBindGroup0 = computeBindGroup0;
 
     const computeBindGroup1 = device.createBindGroup({
       layout: blurPipeline.getBindGroupLayout(1),
@@ -471,30 +419,91 @@ export class WebGPUBlur {
     const device = this.device;
     const blockDim = tileDim - (this.settings.filterSize - 1);
 
-    if (src instanceof Image) {
-      await src.decode();
-      const imageBitmap = await createImageBitmap(src);
+    let externalResource;
+    if (src instanceof Image || src instanceof VideoFrame) {
+      let imageBitmap;
+      if (src instanceof Image) {
+        await src.decode();
+        imageBitmap = await createImageBitmap(src);
+      } else {
+        imageBitmap = await createImageBitmap(src);
+      }
       await this.init_({width: imageBitmap.width, height: imageBitmap.height}, segmap);
       device.queue.copyExternalImageToTexture(
         { source: imageBitmap },
         { texture: this.cubeTexture },
         [ this.srcWidth, this.srcHeight]
       );
-    } else if (src instanceof HTMLCanvasElement) {
-      await this.init_({width: src.width, height: src.height}, segmap);
-      device.queue.copyExternalImageToTexture(
-        { source: src },
-        { texture: this.cubeTexture },
-        [ this.srcWidth, this.srcHeight]
-      );
+      externalResource = this.cubeTexture.createView();
+    // } else if (src instanceof VideoFrame) {
+    //   await this.init_({width: src.codedWidth, height: src.codedHeight}, segmap, true);
+    //   const externalTextureDescriptor = {source: src};
+    //   externalResource = device.importExternalTexture(externalTextureDescriptor);
+    } else {
+      throw new Error('The type of src is not supported.');
     }
+
+    const computeSegBindGroup = device.createBindGroup({
+      layout: this.segPipeline.getBindGroupLayout(0),
+      entries: [
+        {
+          binding: 0,
+          resource: this.sampler,
+        },
+        {
+          binding: 1,
+          resource: {
+            buffer: this.segmapSizeBuffer,
+          },
+        },
+        {
+          binding: 2,
+          resource: {
+            buffer: this.segmapBuffer,
+          },
+        },
+        {
+          binding: 3,
+          resource: externalResource,
+        },
+        {
+          binding: 4,
+          resource: this.textures[0].createView(),
+        },
+        {
+          binding: 5,
+          resource: this.textures[2].createView(),
+        },
+      ],
+    });
+
+    const computeBindGroup0 = device.createBindGroup({
+      layout: this.blurPipeline.getBindGroupLayout(1),
+      entries: [
+        {
+          binding: 1,
+          resource: externalResource,
+        },
+        {
+          binding: 2,
+          resource: this.textures[0].createView(),
+        },
+        {
+          binding: 3,
+          resource: {
+            buffer: this.buffer0,
+          },
+        },
+      ],
+    });
+
     const commandEncoder = device.createCommandEncoder();
 
     const computePass = commandEncoder.beginComputePass();
     computePass.setPipeline(this.blurPipeline);
     computePass.setBindGroup(0, this.computeConstants);
 
-    computePass.setBindGroup(1, this.computeBindGroup0);
+    computePass.setBindGroup(1, computeBindGroup0);
     computePass.dispatch(
       Math.ceil(this.srcWidth / blockDim),
       Math.ceil(this.srcHeight / batch[1])
@@ -521,7 +530,7 @@ export class WebGPUBlur {
     }
 
     computePass.setPipeline(this.segPipeline);
-    computePass.setBindGroup(0, this.computeSegBindGroup);
+    computePass.setBindGroup(0, computeSegBindGroup);
     computePass.dispatch(
       Math.ceil(this.srcWidth / 8),
       Math.ceil(this.srcHeight / 8)

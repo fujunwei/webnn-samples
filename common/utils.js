@@ -182,19 +182,20 @@ export function getInputGPUTensor(inputElement, inputOptions) {
     [height, width, channels] = inputDimensions.slice(1);
   }
   const inputTensor = tf.tidy(() => {
-    let tensor = tf.browser.fromPixels(inputElement).resizeBilinear([height, width]);
+    let tensor = tf.browser.fromPixels(inputElement);
+    tensor = tf.image.resizeBilinear(tensor, [height, width]);
     if (inputOptions.normTensor instanceof tf.Tensor) {
-      tensor = tensor.div(inputOptions.normTensor)
+      tensor = tf.div(tensor, inputOptions.normTensor)
     }
     if (inputOptions.meanTensor instanceof tf.Tensor) {
-      tensor = tensor.sub(inputOptions.meanTensor);
+      tensor = tf.sub(tensor, inputOptions.meanTensor);
     }
     if (inputOptions.stdTensor instanceof tf.Tensor) {
-      tensor = tensor.div(inputOptions.stdTensor);
+      tensor = tf.div(tensor, inputOptions.stdTensor);
     }
     if (inputLayout === 'nchw') {
       // nhwc -> nchw
-      tensor = tensor.transpose([2, 0, 1]);
+      tensor = tf.transpose(tensor, [2, 0, 1]);
     }
     return tensor;
   });
