@@ -7,6 +7,7 @@ import * as utils from '../common/utils.js';
 // import {Renderer} from './lib/renderer.js';
 
 import { WebGPUBlur } from './blur.js';
+import { DeepLabV3MNV2NchwPolyfill } from './deeplabv3_mnv2_nchw_polyfill.js';
 
 const imgElement = document.getElementById('feedElement');
 imgElement.src = './images/test.jpg';
@@ -230,24 +231,28 @@ function stopCamera() {
 let lastComputeTime = 0;
 function segmentSemantic() {
   return async (videoFrame, controller) => {
-    const inputBuffer = utils.getInputGPUTensor(videoFrame, inputOptions);
+    const inputTensor = utils.getInputGPUTensor(videoFrame, inputOptions);
     console.log('- Computing... ');
     const now = performance.now();
     computeTime = (now - lastComputeTime).toFixed(2);
     lastComputeTime = now;
-    await netInstance.computeGPUTensorToGPUBuffer(inputBuffer);
+    const outputTensor = netInstance.computeOutputGPUTensor(inputTensor);
     console.log(`  done in ${computeTime} ms.`);
-    showPerfResult();
+    const segmapTensor = tf.tidy(() => tf.argMax(outputTensor, 1));
+    tf.engine().backendInstance.submitQueue();
+    const segmapBuffer = tf.engine().backendInstance.getBuffer(segmapTensor.dataId);
     await renderer.drawOutput(videoFrame, 
-      {buffer: netInstance.outputGPUBufferForProcessing_, width: netInstance.outputWidth, height: netInstance.outputHeight});
+      {buffer: segmapBuffer, width: netInstance.outputWidth, height: netInstance.outputHeight});
+    showPerfResult();
+    
     $('#fps').text(`${(1000/computeTime).toFixed(0)} FPS`);
 
     const frame_from_canvas = new VideoFrame(outputCanvas, {timestamp: videoFrame.timestamp});
     controller.enqueue(frame_from_canvas);
     
-    if (inputBuffer instanceof tf.Tensor) {
-      inputBuffer.dispose();
-    }
+    inputTensor.dispose();
+    outputTensor.dispose();
+    segmapTensor.dispose();
     videoFrame.close();
   };
 }
@@ -301,6 +306,7 @@ function showPerfResult(medianComputeTime = undefined) {
 function constructNetObject(type) {
   const netObject = {
     'deeplabv3mnv2nchw': new DeepLabV3MNV2Nchw(),
+    'deeplabv3mnv2nchwpolyfill': new DeepLabV3MNV2NchwPolyfill(),
     'deeplabv3mnv2nhwc': new DeepLabV3MNV2Nhwc(),
   };
 
@@ -318,6 +324,7 @@ export async function main() {
     const params = new URLSearchParams(location.search);
     let numRuns = params.get('numRuns');
     numRuns = numRuns === null ? 1 : parseInt(numRuns);
+    const isPolyfill = params.get('polyfill') === 'true';
 
     if (numRuns < 1) {
       ui.addAlert('The value of param numRuns must be greater than or equal' +
@@ -337,12 +344,10 @@ export async function main() {
         // Call dispose() to and avoid memory leak
         netInstance.dispose();
       }
-      instanceType = modelName + layout;
+      instanceType = modelName + layout + (isPolyfill ? 'polyfill' : '');
       netInstance = constructNetObject(instanceType);
       inputOptions = netInstance.inputOptions;
       labels = await fetchLabels(inputOptions.labelUrl);
-      outputBuffer =
-          new Uint32Array(utils.sizeOfShape(netInstance.outputDimensions));
       isFirstTimeLoad = false;
       console.log(`- Model name: ${modelName}, Model layout: ${layout} -`);
       // UI shows model loading progress
@@ -366,36 +371,24 @@ export async function main() {
       $('#outputCanvas').show();
       $('#feedMediaElement').hide();
       $('#resultMediaElement').hide();
-      const inputBuffer = utils.getInputGPUTensor(imgElement, inputOptions);
+      const inputTensor = utils.getInputGPUTensor(imgElement, inputOptions);
       console.log('- Computing... ');
-      const computeTimeArray = [];
-      let medianComputeTime;
-      if (numRuns > 1) {
-        // Do warm up
-        await netInstance.computeGPUTensorToGPUBuffer(inputBuffer);
-      }
-      for (let i = 0; i < numRuns; i++) {
-        start = performance.now();
-        await netInstance.computeGPUTensorToGPUBuffer(inputBuffer);
-        computeTime = (performance.now() - start).toFixed(2);
-        console.log(`  compute time ${i+1}: ${computeTime} ms`);
-        computeTimeArray.push(Number(computeTime));
-      }
-      if (numRuns > 1) {
-        medianComputeTime = utils.getMedianValue(computeTimeArray);
-        medianComputeTime = medianComputeTime.toFixed(2);
-        console.log(`  median compute time: ${medianComputeTime} ms`);
-      }
-      console.log('output: ', outputBuffer);
+      start = performance.now();
+      const outputTensor = netInstance.computeOutputGPUTensor(inputTensor);
+      computeTime = (performance.now() - start).toFixed(2);
+      console.log(`  compute time: ${computeTime} ms`);
       await ui.showProgressComponent('done', 'done', 'done');
       $('#fps').hide();
       ui.readyShowResultComponents();
+      const segmapTensor = tf.tidy(() => tf.argMax(outputTensor, 1));
+      tf.engine().backendInstance.submitQueue();
+      const segmapBuffer = tf.engine().backendInstance.getBuffer(segmapTensor.dataId);
       await renderer.drawOutput(imgElement, 
-        {buffer: netInstance.outputGPUBufferForProcessing_, width: netInstance.outputWidth, height: netInstance.outputHeight});
-      showPerfResult(medianComputeTime);
-      if (inputBuffer instanceof tf.Tensor) {
-        inputBuffer.dispose();
-      }
+        {buffer: segmapBuffer, width: netInstance.outputWidth, height: netInstance.outputHeight});
+      showPerfResult();
+      inputTensor.dispose();
+      outputTensor.dispose();
+      segmapTensor.dispose();
     } else if (inputType === 'camera') {
       $('#outputCanvas').hide();
       $('#feedMediaElement').show();

@@ -55,9 +55,22 @@ export class BaseNetwork {
     this.outputGPUBuffer_.unmap();
   }
 
+  computeOutputGPUTensor(inputTensor) {
+    const outputTensor = tf.tidy(() => tf.add(tf.zeros(this.outputDimensions), tf.zeros(this.outputDimensions)));
+    tf.engine().backendInstance.submitQueue();
+    const inputGPUBuffer = tf.engine().backendInstance.getBuffer(inputTensor.dataId);
+    const outputGPUBuffer = tf.engine().backendInstance.getBuffer(outputTensor.dataId);
+    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: outputGPUBuffer}});
+    return outputTensor;
+  }
+
   async computeGPUTensorToGPUBuffer(inputTensor) {
     const inputGPUBuffer = tf.engine().backendInstance.getBuffer(inputTensor.dataId);
     this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBufferForProcessing_}});
+  }
+
+  getOutputGPUBufferForProcessing() {
+    return this.outputGPUBufferForProcessing_;
   }
 
   async compute(inputBuffer, outputBuffer, typedArrayConstructor = Float32Array) {

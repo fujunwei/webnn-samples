@@ -1,12 +1,12 @@
 'use strict';
 
-import { BaseNetwork } from '../common/base_net.js';
-import {buildConstantByNpy, sizeOfShape} from '../common/utils.js';
+import { BaseNetwork } from '../common/base_net_polyfill.js';
+import {buildConstantByNpy} from '../common/utils.js';
 
 /* eslint max-len: ["error", {"code": 120}] */
 
 // DeepLab V3 MobileNet V2 model with 'nchw' input layout
-export class DeepLabV3MNV2Nchw extends BaseNetwork {
+export class DeepLabV3MNV2NchwPolyfill extends BaseNetwork {
   constructor() {
     super();
     this.weightsUrl_ = '../test-data/models/deeplabv3_mnv2_nchw/weights/';
@@ -39,8 +39,8 @@ export class DeepLabV3MNV2Nchw extends BaseNetwork {
       biasName = biasPrefix + '_biases.npy';
     }
 
-    const weights = await buildConstantByNpy(this.device_, this.builder_, weightsName);
-    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName);
+    const weights = await buildConstantByNpy(this.device_, this.builder_, weightsName, true);
+    const bias = await buildConstantByNpy(this.device_, this.builder_, biasName, true);
 
     options.bias = bias;
     if (activation === 'relu6') {
@@ -83,8 +83,8 @@ export class DeepLabV3MNV2Nchw extends BaseNetwork {
 
   async load(devicePreference) {
     await this.init();
-    const context = navigator.ml.createContext(this.device_);
-    this.builder_ = new MLGraphBuilder(context);
+    const context = navigator.ml_polyfill.createContext(this.device_);
+    this.builder_ = new MLGraphBuilderPolyfill(context);
     const strides = [2, 2];
 
     const input = this.builder_.input('input',

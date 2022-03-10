@@ -18,8 +18,7 @@ export class BaseNetwork {
 
   build(outputOperand) {
     this.graph_ = this.builder_.build({'output': outputOperand});
-    this.outputGPUBuffer_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST});
-    this.outputGPUBufferForProcessing_ = this.device_.createBuffer({size: this.outputSizeInBytes_, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE});
+    this.outputGPUBufferForProcessing_ = {resource: null};
     if (this.inputOptions.std) {
       this.inputOptions.stdTensor = tf.tensor1d(this.inputOptions.std);
     }
@@ -54,9 +53,18 @@ export class BaseNetwork {
     outputResource.resource.dispose();
   }
 
+  computeOutputGPUTensor(inputTensor) {
+    const outputResource = {resource: null};
+    this.graph_.compute({'input': {resource: inputTensor}}, {'output': outputResource});
+    return outputResource.resource;
+  }
+
   async computeGPUTensorToGPUBuffer(inputTensor) {
-    const inputGPUBuffer = tf.engine().backendInstance.getBuffer(inputTensor.dataId);
-    this.graph_.compute({'input': {resource: inputGPUBuffer}}, {'output': {resource: this.outputGPUBufferForProcessing_}});
+    this.graph_.compute({'input': {resource: inputTensor}}, {'output': this.outputGPUBufferForProcessing_});
+  }
+
+  getOutputGPUBufferForProcessing() {
+    return this.outputGPUBufferForProcessing_.resource;
   }
 
   async compute(inputBuffer, outputBuffer, typedArrayConstructor = Float32Array) {

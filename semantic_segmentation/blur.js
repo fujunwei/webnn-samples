@@ -1,6 +1,6 @@
 const segWGSL = `
 [[block]] struct SegMap {
-  labels: array<u32>;
+  labels: array<i32>;
 };
 
 [[block]] struct SegMapSize {
@@ -25,7 +25,7 @@ fn main([[builtin(global_invocation_id)]] globalID : vec3<u32>) {
   var segmapX : u32 = u32(floor(f32(globalID.x) / f32(dims.x) * f32(segmapSize.width)));
   var segmapY : u32 = u32(floor(f32(globalID.y) / f32(dims.y) * f32(segmapSize.height)));
   var segmapIndex = segmapX + segmapY * segmapSize.height;
-  if (segmap.labels[segmapIndex] == 0u) {
+  if (segmap.labels[segmapIndex] == 0) {
     textureStore(outputTex, vec2<i32>(globalID.xy), vec4<f32>(background, 1.0));
   } else {
     textureStore(outputTex, vec2<i32>(globalID.xy), vec4<f32>(input, 1.0));
@@ -434,6 +434,7 @@ export class WebGPUBlur {
         { texture: this.cubeTexture },
         [ this.srcWidth, this.srcHeight]
       );
+      imageBitmap.close();
       externalResource = this.cubeTexture.createView();
     // } else if (src instanceof VideoFrame) {
     //   await this.init_({width: src.codedWidth, height: src.codedHeight}, segmap, true);
