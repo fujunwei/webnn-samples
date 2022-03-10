@@ -34,6 +34,7 @@ let lastDevicePreference = '';
 const disabledSelectors = ['#tabs > li', '.btn'];
 // An AbortController used to stop the transform.
 let abortController = null;
+let isPolyfill = false;
 
 $(document).ready(() => {
   $('.icdisplay').hide();
@@ -231,28 +232,39 @@ function stopCamera() {
 let lastComputeTime = 0;
 function segmentSemantic() {
   return async (videoFrame, controller) => {
-    const inputTensor = utils.getInputGPUTensor(videoFrame, inputOptions);
     console.log('- Computing... ');
-    const now = performance.now();
-    computeTime = (now - lastComputeTime).toFixed(2);
-    lastComputeTime = now;
-    const outputTensor = netInstance.computeOutputGPUTensor(inputTensor);
-    console.log(`  done in ${computeTime} ms.`);
-    const segmapTensor = tf.tidy(() => tf.argMax(outputTensor, 1));
-    tf.engine().backendInstance.submitQueue();
-    const segmapBuffer = tf.engine().backendInstance.getBuffer(segmapTensor.dataId);
+    const start = performance.now();
+
+    const inputTensor = utils.getInputGPUTensor(videoFrame, inputOptions);
+    let outputTensor;
+    let segmapTensor;
+    let segmapBuffer;
+    if (isPolyfill) {
+      outputTensor = netInstance.computeOutputGPUTensor(inputTensor);
+      segmapTensor = tf.tidy(() => tf.argMax(outputTensor, 1));
+      tf.engine().backendInstance.submitQueue();
+      segmapBuffer = tf.engine().backendInstance.getBuffer(segmapTensor.dataId);
+    } else {
+      netInstance.computeGPUTensorToGPUBuffer(inputTensor);
+      segmapBuffer = netInstance.getOutputGPUBufferForProcessing();
+    }
     await renderer.drawOutput(videoFrame, 
       {buffer: segmapBuffer, width: netInstance.outputWidth, height: netInstance.outputHeight});
-    showPerfResult();
-    
-    $('#fps').text(`${(1000/computeTime).toFixed(0)} FPS`);
+    await tf.engine().backendInstance.device.queue.onSubmittedWorkDone();
 
-    const frame_from_canvas = new VideoFrame(outputCanvas, {timestamp: videoFrame.timestamp});
+    const frame_from_canvas = new VideoFrame(outputCanvas, {timestamp: 0});
     controller.enqueue(frame_from_canvas);
+
+    computeTime = (performance.now() - start).toFixed(2);
+    console.log(`  done in ${computeTime} ms.`);
+    showPerfResult();
+    $('#fps').text(`${(1000/computeTime).toFixed(0)} FPS`);
     
     inputTensor.dispose();
-    outputTensor.dispose();
-    segmapTensor.dispose();
+    if (isPolyfill) {
+      outputTensor.dispose();
+      segmapTensor.dispose();
+    }
     videoFrame.close();
   };
 }
@@ -324,7 +336,8 @@ export async function main() {
     const params = new URLSearchParams(location.search);
     let numRuns = params.get('numRuns');
     numRuns = numRuns === null ? 1 : parseInt(numRuns);
-    const isPolyfill = params.get('polyfill') === 'true';
+    isPolyfill = params.get('polyfill') === 'true';
+    const polyfill = isPolyfill ? 'polyfill' : '';
 
     if (numRuns < 1) {
       ui.addAlert('The value of param numRuns must be greater than or equal' +
@@ -333,7 +346,7 @@ export async function main() {
     }
     // Only do load() and build() when model first time loads,
     // there's new model choosed, and device backend changed
-    if (isFirstTimeLoad || instanceType !== modelName + layout ||
+    if (isFirstTimeLoad || instanceType !== modelName + layout + polyfill ||
       lastDevicePreference != devicePreference) {
       if (lastDevicePreference != devicePreference) {
         // Set polyfill backend
@@ -344,7 +357,7 @@ export async function main() {
         // Call dispose() to and avoid memory leak
         netInstance.dispose();
       }
-      instanceType = modelName + layout + (isPolyfill ? 'polyfill' : '');
+      instanceType = modelName + layout + polyfill;
       netInstance = constructNetObject(instanceType);
       inputOptions = netInstance.inputOptions;
       labels = await fetchLabels(inputOptions.labelUrl);
@@ -371,24 +384,35 @@ export async function main() {
       $('#outputCanvas').show();
       $('#feedMediaElement').hide();
       $('#resultMediaElement').hide();
-      const inputTensor = utils.getInputGPUTensor(imgElement, inputOptions);
       console.log('- Computing... ');
       start = performance.now();
-      const outputTensor = netInstance.computeOutputGPUTensor(inputTensor);
+      const inputTensor = utils.getInputGPUTensor(imgElement, inputOptions);
+      let outputTensor;
+      let segmapTensor;
+      let segmapBuffer;
+      if (isPolyfill) {
+        outputTensor = netInstance.computeOutputGPUTensor(inputTensor);
+        segmapTensor = tf.tidy(() => tf.argMax(outputTensor, 1));
+        tf.engine().backendInstance.submitQueue();
+        segmapBuffer = tf.engine().backendInstance.getBuffer(segmapTensor.dataId);
+      } else {
+        netInstance.computeGPUTensorToGPUBuffer(inputTensor);
+        segmapBuffer = netInstance.getOutputGPUBufferForProcessing();
+      }
+      await renderer.drawOutput(imgElement, 
+        {buffer: segmapBuffer, width: netInstance.outputWidth, height: netInstance.outputHeight});
+      await netInstance.device_.queue.onSubmittedWorkDone();
       computeTime = (performance.now() - start).toFixed(2);
       console.log(`  compute time: ${computeTime} ms`);
       await ui.showProgressComponent('done', 'done', 'done');
       $('#fps').hide();
       ui.readyShowResultComponents();
-      const segmapTensor = tf.tidy(() => tf.argMax(outputTensor, 1));
-      tf.engine().backendInstance.submitQueue();
-      const segmapBuffer = tf.engine().backendInstance.getBuffer(segmapTensor.dataId);
-      await renderer.drawOutput(imgElement, 
-        {buffer: segmapBuffer, width: netInstance.outputWidth, height: netInstance.outputHeight});
       showPerfResult();
       inputTensor.dispose();
-      outputTensor.dispose();
-      segmapTensor.dispose();
+      if (isPolyfill) {
+        outputTensor.dispose();
+        segmapTensor.dispose();
+      }
     } else if (inputType === 'camera') {
       $('#outputCanvas').hide();
       $('#feedMediaElement').show();

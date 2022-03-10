@@ -20,7 +20,7 @@ export class DeepLabV3MNV2Nchw extends BaseNetwork {
       labelUrl: './labels/labels.txt',
       inputDimensions: [1, 3, 513, 513],
     };
-    this.outputDimensions = [1, 21, 513, 513];
+    this.outputDimensions = [1, 1, 513, 513];
     this.outputWidth = 513;
     this.outputHeight = 513;
   }
@@ -143,6 +143,6 @@ export class DeepLabV3MNV2Nchw extends BaseNetwork {
         conv6, {sizes: [65, 65], mode: 'linear'});
     const resample2 = this.builder_.resample2d(
         resample1, {sizes: [513, 513], mode: 'linear'});
-    return resample2;
+    return this.builder_.reduceArgMax(resample2, {axes: [1], keepDimensions: false});
   }
 }
