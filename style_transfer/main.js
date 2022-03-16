@@ -124,7 +124,7 @@ async function renderCamStream() {
   const inputCanvas = utils.getVideoFrame(camElement);
   console.log('- Computing... ');
   const start = performance.now();
-  fastStyleTransferNet.compute(inputBuffer, outputBuffer);
+  await fastStyleTransferNet.computeAsync(inputBuffer, outputBuffer);
   computeTime = (performance.now() - start).toFixed(2);
   console.log(`  done in ${computeTime} ms.`);
   camElement.width = camElement.videoWidth;
@@ -250,11 +250,11 @@ export async function main() {
       let medianComputeTime;
       if (numRuns > 1) {
         // Do warm up
-        await fastStyleTransferNet.compute(inputBuffer, outputBuffer);
+        await fastStyleTransferNet.computeAsync(inputBuffer, outputBuffer);
       }
       for (let i = 0; i < numRuns; i++) {
         start = performance.now();
-        await fastStyleTransferNet.compute(inputBuffer, outputBuffer);
+        await fastStyleTransferNet.computeAsync(inputBuffer, outputBuffer);
         computeTime = (performance.now() - start).toFixed(2);
         console.log(`  compute time ${i+1}: ${computeTime} ms`);
         computeTimeArray.push(Number(computeTime));

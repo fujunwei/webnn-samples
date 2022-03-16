@@ -147,7 +147,7 @@ async function denoise() {
     const preProcessingTime = (performance.now() - start).toFixed(2);
     inputs.input = new Float32Array(features);
     start = performance.now();
-    await rnnoise.compute( inputs, outputs);
+    await rnnoise.computeAsync( inputs, outputs);
     const executionTime = (performance.now() - start).toFixed(2);
     inputs.vadGruInitialH = outputs.vadGruYH;
     inputs.noiseGruInitialH = outputs.noiseGruYH;

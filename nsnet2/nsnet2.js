@@ -59,7 +59,7 @@ export class NSNet2 {
     this.graph_ = await this.builder_.build(outputOperand);
   }
 
-  async compute(inputBuffer, initialState92Buffer, initialState155Buffer, outputBuffer, gru94Buffer, gru157Buffer) {
+  async computeAsync(inputBuffer, initialState92Buffer, initialState155Buffer, outputBuffer, gru94Buffer, gru157Buffer) {
     const inputs = {
       'input': inputBuffer,
       'initialState92': initialState92Buffer,
@@ -70,7 +70,7 @@ export class NSNet2 {
       'gru94': gru94Buffer,
       'gru157': gru157Buffer,
     };
-    await this.graph_.compute(inputs, outputs);
+    await this.graph_.computeAsync(inputs, outputs);
     return outputs;
   }
 }

@@ -9,7 +9,7 @@ const b = builder.input('b', descB);
 const c = builder.matmul(a, b);
 const graph = builder.build({'c': c});
 
-function compute(shapeA, shapeB, shapeC) {
+async function compute(shapeA, shapeB, shapeC) {
   const bufferA = new Float32Array(sizeOfShape(shapeA)).fill(0.5);
   const bufferB = new Float32Array(sizeOfShape(shapeB)).fill(0.5);
   const bufferC = new Float32Array(sizeOfShape(shapeC));
@@ -20,7 +20,7 @@ function compute(shapeA, shapeB, shapeC) {
     'b': {resource: bufferB, dimensions: shapeB},
   };
   const outputs = {'c': bufferC};
-  graph.compute(inputs, outputs);
+  await graph.computeAsync(inputs, outputs);
   console.log(`values: ${bufferC}`);
 }
 

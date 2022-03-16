@@ -56,7 +56,7 @@ const inputs = {
   'input2': inputBuffer2,
 };
 const outputs = {'output': outputBuffer};
-graph.compute(inputs, outputs);
+graph.computeAsync(inputs, outputs);
 
 console.log('Output value: ' + outputBuffer);
 // Output value: 2.25,2.25,2.25,2.25,2.25,2.25,2.25,2.25

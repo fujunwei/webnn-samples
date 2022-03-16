@@ -126,9 +126,9 @@ export class MobileNetV2Nhwc {
     }
   }
 
-  async compute(inputBuffer, outputBuffer) {
+  async computeAsync(inputBuffer, outputBuffer) {
     const inputs = {'input': inputBuffer};
     const outputs = {'output': outputBuffer};
-    await this.graph_.compute(inputs, outputs);
+    await this.graph_.computeAsync(inputs, outputs);
   }
 }

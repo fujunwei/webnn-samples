@@ -125,7 +125,7 @@ export class Denoiser {
       inputFeature.dispose();
       const calcFeatTime = (performance.now() - start).toFixed(2);
       start = performance.now();
-      const outputs = await this.nsnet.compute(
+      const outputs = await this.nsnet.computeAsync(
           inputData, initialHiddenState92Buffer, initialHiddenState155Buffer,
           outputBuffer, gru94Buffer, gru157Buffer);
       const computeTime = (performance.now() - start).toFixed(2);

@@ -100,8 +100,8 @@ export class TinyYoloV2Nchw {
     }
   }
 
-  async compute(inputBuffer, outputs) {
+  async computeAsync(inputBuffer, outputs) {
     const inputs = {'input': inputBuffer};
-    await this.graph_.compute(inputs, outputs);
+    await this.graph_.computeAsync(inputs, outputs);
   }
 }

@@ -142,7 +142,7 @@ export class RNNoise {
     this.graph_ = await this.builder_.build(outputOperand);
   }
 
-  async compute(inputs, outputs) {
-    await this.graph_.compute(inputs, outputs);
+  async computeAsync(inputs, outputs) {
+    await this.graph_.computeAsync(inputs, outputs);
   }
 }

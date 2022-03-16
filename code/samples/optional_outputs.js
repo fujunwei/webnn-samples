@@ -19,10 +19,10 @@ const inputs = {'a': bufferA};
 
 // Compute d.
 const bufferD = new Float32Array(sizeOfShape([3, 3]));
-graph.compute(inputs, {'d': bufferD});
+graph.computeAsync(inputs, {'d': bufferD});
 console.log(`values: ${bufferD}`);
 
 // Compute e.
 const bufferE = new Float32Array(sizeOfShape([3, 3]));
-graph.compute(inputs, {'e': bufferE});
+graph.computeAsync(inputs, {'e': bufferE});
 console.log(`values: ${bufferE}`);
