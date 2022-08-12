@@ -5,6 +5,7 @@ import {buildConstantByNpy} from '../common/utils.js';
 // MobileNet V2 model with 'nchw' input layout
 export class MobileNetV2Nchw {
   constructor() {
+    this.context_ = null;
     this.builder_ = null;
     this.graph_ = null;
     this.weightsUrl_ = '../test-data/models/mobilenetv2_nchw/weights/';
@@ -67,8 +68,8 @@ export class MobileNetV2Nchw {
   }
 
   async load(contextOptions) {
-    const context = await navigator.ml.createContext(contextOptions);
-    this.builder_ = new MLGraphBuilder(context);
+    this.context_ = await navigator.ml.createContext({type: 'webnn', devicePreference: 'gpu'});
+    this.builder_ = new MLGraphBuilder(this.context_);
     const data = this.builder_.input('input',
         {type: 'float32', dimensions: this.inputOptions.inputDimensions});
     const conv0 = await this.buildConv_(
@@ -117,7 +118,7 @@ export class MobileNetV2Nchw {
   }
 
   async build(outputOperand) {
-    this.graph_ = await this.builder_.buildAsync({'output': outputOperand});
+    this.graph_ = await this.builder_.build({'output': outputOperand});
   }
 
   // Release the constant tensors of a model
@@ -131,6 +132,6 @@ export class MobileNetV2Nchw {
   async computeAsync(inputBuffer, outputBuffer) {
     const inputs = {'input': inputBuffer};
     const outputs = {'output': outputBuffer};
-    await this.graph_.computeAsync(inputs, outputs);
+    await this.context_.compute(this.graph_, inputs, outputs);
   }
 }
